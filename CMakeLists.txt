@@ -23,6 +23,9 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math --extended-lambda 
 add_definitions(-DGGML_USE_CUDA)
 add_definitions(-DGGML_CUDA_USE_GRAPHS)
 
+add_definitions(-DGGML_VERSION="1.0.0")
+add_definitions(-DGGML_COMMIT="ember")
+
 # 包含目录
 include_directories(
     ${PROJECT_SOURCE_DIR}/include

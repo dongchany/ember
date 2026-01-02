@@ -78,10 +78,10 @@ ember/
 - [x] 日志和错误处理
 
 ### M2: 核心推理 🚧
-- [ ] 集成 GGML 库
-- [ ] 实现 Qwen3 前向计算
-- [ ] KV Cache 管理
-- [ ] CUDA Kernel 调用
+- [x] 集成 GGML 库
+- [x] 实现 Qwen3 前向计算
+- [x] KV Cache 管理
+- [x] CUDA Kernel 调用
 
 ### M3: 完善功能
 - [ ] 完整 Tokenizer
@@ -103,4 +103,4 @@ Ember 从 llama.cpp 提取核心组件：
 
 ## License
 
-MIT
+Apache-2.0
