@@ -1,6 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <sstream>
+#include "backends/cuda/cuda_utils.h"
 
 
 // ANSI color helpers for the startup banner.
@@ -230,5 +231,5 @@ int main(int argc, char** argv) {
 
     ember_banner();
 
-    // int num_gpus = ember::cuda:get_device_count();
+    int num_gpus = ember::cuda::get_device_count();
 }
