@@ -1,8 +1,13 @@
+#include <filesystem>
 #include <iostream>
-#include <vector>
 #include <sstream>
-#include "backends/cuda/cuda_utils.h"
+#include <vector>
 
+#include "backends/cuda/cuda_utils.h"
+#include "core/config.h"
+#include "runtime/iruntime.h"
+
+namespace fs = std::filesystem;
 
 // ANSI color helpers for the startup banner.
 #define C_RESET "\033[0m"
@@ -14,20 +19,29 @@
 
 static inline void ember_banner() {
     std::printf("\n");
-    std::printf(C_ORANGE  "    ███████╗███╗   ███╗██████╗ ███████╗██████╗ \n" C_RESET);
-    std::printf(C_ORANGE  "    ██╔════╝████╗ ████║██╔══██╗██╔════╝██╔══██╗\n" C_RESET);
-    std::printf(C_YELLOW  "    █████╗  ██╔████╔██║██████╔╝█████╗  ██████╔╝\n" C_RESET);
-    std::printf(C_YELLOW  "    ██╔══╝  ██║╚██╔╝██║██╔══██╗██╔══╝  ██╔══██╗\n" C_RESET);
-    std::printf(C_RED     "    ███████╗██║ ╚═╝ ██║██████╔╝███████╗██║  ██║\n" C_RESET);
-    std::printf(C_RED     "    ╚══════╝╚═╝     ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝\n" C_RESET);
+    std::printf(C_ORANGE
+                "    ███████╗███╗   ███╗██████╗ ███████╗██████╗ \n" C_RESET);
+    std::printf(C_ORANGE
+                "    ██╔════╝████╗ ████║██╔══██╗██╔════╝██╔══██╗\n" C_RESET);
+    std::printf(C_YELLOW
+                "    █████╗  ██╔████╔██║██████╔╝█████╗  ██████╔╝\n" C_RESET);
+    std::printf(C_YELLOW
+                "    ██╔══╝  ██║╚██╔╝██║██╔══██╗██╔══╝  ██╔══██╗\n" C_RESET);
+    std::printf(C_RED
+                "    ███████╗██║ ╚═╝ ██║██████╔╝███████╗██║  ██║\n" C_RESET);
+    std::printf(C_RED
+                "    ╚══════╝╚═╝     ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝\n" C_RESET);
     std::printf("\n");
-    std::printf(C_DIM     "    ─────────────────────────────────────────────\n" C_RESET);
-    std::printf(C_BOLD    "      日拱一卒，功不唐捐；蹄疾步稳，如临深渊。\n" C_RESET);
-    std::printf(C_DIM     "    ─────────────────────────────────────────────\n" C_RESET);
-    std::printf(C_DIM     "    Lightweight CUDA Inference Engine for Qwen3\n" C_RESET);
+    std::printf(C_DIM
+                "    ─────────────────────────────────────────────\n" C_RESET);
+    std::printf(C_BOLD
+                "      日拱一卒，功不唐捐；蹄疾步稳，如临深渊。\n" C_RESET);
+    std::printf(C_DIM
+                "    ─────────────────────────────────────────────\n" C_RESET);
+    std::printf(C_DIM
+                "    Lightweight CUDA Inference Engine for Qwen3\n" C_RESET);
     std::printf("\n");
 }
-
 
 struct Args {
     std::string model_path;
@@ -222,6 +236,10 @@ bool parse_args(int argc, char** argv, Args& args) {
     return true;
 }
 
+ember::ModelConfig parse_model_config(const std::string& config_path){
+
+}
+
 int main(int argc, char** argv) {
     Args args;
     if (!parse_args(argc, argv, args)) {
@@ -232,4 +250,61 @@ int main(int argc, char** argv) {
     ember_banner();
 
     int num_gpus = ember::cuda::get_device_count();
+    if (num_gpus == 0) {
+        std::cerr << "Error: No CUDA devices found\n";
+        return 1;
+    }
+
+    std::cout << "[System] Found " << num_gpus << " CUDA device(s)\n";
+    for (int i = 0; i < num_gpus; ++i) {
+        auto info = ember::cuda::get_gpu_info(i);
+        std::cout << " GPU " << i << ": " << info.name << " ("
+                  << (info.total_memory / (1024 * 1024 * 1024)) << " GB)\n";
+    }
+    std::cout << "\n";
+
+    // Check devices
+    for (int dev : args.devices) {
+        if (dev >= num_gpus) {
+            std::cerr << "Error: Invalid device ID " << dev << "\n";
+            return 1;
+        }
+    }
+
+    // Automatically detect the Hugging Face cache directory structure
+    // If the format is models--Org--Model, automatically locate the latest
+    // version in the snapshots directory
+    auto resolve_hf_cache_path = [](const std::string& path) -> std::string {
+    };
+
+    args.model_path = resolve_hf_cache_path(args.model_path);
+
+    // Load model config
+    std::string config_path = args.model_path + "/config.json";
+    if (!fs::exists(config_path)) {
+        std::cerr << "Error: config.json not found in " << args.model_path
+                  << "\n";
+        return 1;
+    }
+
+    ember::ModelConfig model_config;
+    try {
+        model_config = parse_model_config(config_path);
+    } catch (const std::) {
+        std::cerr << "Error parsing config: " << e.what() << "\n";
+        return 1;
+    }
+
+    std::cout << "[Model] " << model_config.model_type << "\n";
+    std::cout << "  Vocab size: " << model_config.vocab_size << "\n";
+    std::cout << "  Hidden size: " << model_config.hidden_size << "\n";
+    std::cout << "  Layers: " << model_config.num_layers << "\n";
+    std::cout << "  Heads: " << model_config.num_heads
+              << " (KV: " << model_config.num_kv_heads << ")\n";
+    std::cout << "  Intermediate: " << model_config.intermediate_size << "\n";
+    std::cout << "\n";
+
+    // Create device mapping
+    ember::DeviceMap device_map = ember::DeviceMap::single_device(
+        model_config.num_layers, args.devices[0]);
 }
