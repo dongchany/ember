@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-# CUDA 配置
 find_package(CUDAToolkit REQUIRED)
 
 set(CMAKE_CUDA_ARCHITECTURES "86" CACHE STRING "CUDA architectures")
@@ -17,7 +16,12 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math")
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CUDAToolkit_INCLUDE_DIRS})
 
-add_executable(ember main.cpp)
+# =============================================================================
+# Core lib
+# =============================================================================
+set(CORE_SOURCES core/config_loader.cpp)
+
+add_executable(ember main.cpp cli/args.cpp)
 target_link_libraries(ember PRIVATE
     CUDA::cudart
     CUDA::cublas

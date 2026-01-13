@@ -3,9 +3,10 @@
 #include <sstream>
 #include <vector>
 
-#include "backends/cuda/cuda_utils.h"
+#include "cli/args.h"
 #include "core/config.h"
 #include "runtime/iruntime.h"
+#include "backends/cuda/cuda_utils.h"
 
 namespace fs = std::filesystem;
 
@@ -241,29 +242,30 @@ ember::ModelConfig parse_model_config(const std::string& config_path){
 }
 
 int main(int argc, char** argv) {
-    Args args;
-    if (!parse_args(argc, argv, args)) {
-        print_usage(argv[0]);
+    ember::cli::Args args;
+    if (!ember::cli::parse_args(argc, argv, args)) {
+        ember::cli::print_usage(argv[0]);
         return 1;
     }
 
     ember_banner();
-
+    
+    // 检查 GPU
     int num_gpus = ember::cuda::get_device_count();
     if (num_gpus == 0) {
         std::cerr << "Error: No CUDA devices found\n";
         return 1;
     }
-
+    
     std::cout << "[System] Found " << num_gpus << " CUDA device(s)\n";
     for (int i = 0; i < num_gpus; ++i) {
         auto info = ember::cuda::get_gpu_info(i);
-        std::cout << " GPU " << i << ": " << info.name << " ("
-                  << (info.total_memory / (1024 * 1024 * 1024)) << " GB)\n";
+        std::cout << "  GPU " << i << ": " << info.name 
+                  << " (" << (info.total_memory / (1024*1024*1024)) << " GB)\n";
     }
     std::cout << "\n";
-
-    // Check devices
+    
+    // 验证设备
     for (int dev : args.devices) {
         if (dev >= num_gpus) {
             std::cerr << "Error: Invalid device ID " << dev << "\n";
@@ -275,6 +277,7 @@ int main(int argc, char** argv) {
     // If the format is models--Org--Model, automatically locate the latest
     // version in the snapshots directory
     auto resolve_hf_cache_path = [](const std::string& path) -> std::string {
+
     };
 
     args.model_path = resolve_hf_cache_path(args.model_path);
@@ -290,7 +293,7 @@ int main(int argc, char** argv) {
     ember::ModelConfig model_config;
     try {
         model_config = parse_model_config(config_path);
-    } catch (const std::) {
+    } catch (const std::exception& e) {
         std::cerr << "Error parsing config: " << e.what() << "\n";
         return 1;
     }
