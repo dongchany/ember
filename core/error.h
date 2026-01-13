@@ -39,6 +39,8 @@ class Error {
     Error(ErrorCode code, std::string message)
         : code_(code), message_(std::move(message)) {}
 
+    const std::string& message() const {return message_;}
+
     static Error success() { return Error(); }
 
     static Error cuda_error(const std::string& msg) {

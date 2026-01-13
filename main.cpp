@@ -3,10 +3,12 @@
 #include <sstream>
 #include <vector>
 
+#include "backends/cuda/cuda_utils.h"
 #include "cli/args.h"
 #include "core/config.h"
+#include "core/error.h"
+#include "core/types.h"
 #include "runtime/iruntime.h"
-#include "backends/cuda/cuda_utils.h"
 
 namespace fs = std::filesystem;
 
@@ -35,12 +37,7 @@ static inline void ember_banner() {
     std::printf("\n");
     std::printf(C_DIM
                 "    ─────────────────────────────────────────────\n" C_RESET);
-    std::printf(C_BOLD
-                "      日拱一卒，功不唐捐；蹄疾步稳，如临深渊。\n" C_RESET);
-    std::printf(C_DIM
-                "    ─────────────────────────────────────────────\n" C_RESET);
-    std::printf(C_DIM
-                "    Lightweight CUDA Inference Engine for Qwen3\n" C_RESET);
+    std::printf(C_DIM "       Lightweight CUDA Inference Engine\n" C_RESET);
     std::printf("\n");
 }
 
@@ -237,9 +234,7 @@ bool parse_args(int argc, char** argv, Args& args) {
     return true;
 }
 
-ember::ModelConfig parse_model_config(const std::string& config_path){
-
-}
+ember::ModelConfig parse_model_config(const std::string& config_path) {}
 
 int main(int argc, char** argv) {
     ember::cli::Args args;
@@ -249,22 +244,22 @@ int main(int argc, char** argv) {
     }
 
     ember_banner();
-    
+
     // 检查 GPU
     int num_gpus = ember::cuda::get_device_count();
     if (num_gpus == 0) {
         std::cerr << "Error: No CUDA devices found\n";
         return 1;
     }
-    
+
     std::cout << "[System] Found " << num_gpus << " CUDA device(s)\n";
     for (int i = 0; i < num_gpus; ++i) {
         auto info = ember::cuda::get_gpu_info(i);
-        std::cout << "  GPU " << i << ": " << info.name 
-                  << " (" << (info.total_memory / (1024*1024*1024)) << " GB)\n";
+        std::cout << "  GPU " << i << ": " << info.name << " ("
+                  << (info.total_memory / (1024 * 1024 * 1024)) << " GB)\n";
     }
     std::cout << "\n";
-    
+
     // 验证设备
     for (int dev : args.devices) {
         if (dev >= num_gpus) {
@@ -310,4 +305,52 @@ int main(int argc, char** argv) {
     // Create device mapping
     ember::DeviceMap device_map = ember::DeviceMap::single_device(
         model_config.num_layers, args.devices[0]);
+
+    auto runtime = ember::RuntimeFactory::create_cuda();
+    if (!runtime || !runtime->available()) {
+        std::cerr << "Error: CUDA runtime not available\n";
+        return 1;
+    }
+
+    auto mem_est = runtime->estimate_memory(model_config, args.ctx_size, 1);
+    std::cout << mem_set.to_string() << "\n";
+
+    std::cout << "[Loading] Model from " << args.model_path << "...\n";
+    auto start_load = std::chrono::high_resolution_clock::now();
+
+    ember::Error err = runtime->load(args.model_path, model_config, device_map);
+    if (err) {
+        std::cerr << "Error loading model: " << err.message() << "\n";
+        return 1;
+    }
+
+    auto end_load = std::chrono::high_resolution_clock::now();
+    auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         end_load - start_load)
+                         .count();
+    std::cout << "[Loaded] in " << load_time << " ms\n\n";
+
+    ember::RuntimeConfig runtime_config;
+    runtime_config.max_ctx_len = args.ctx_size;
+    runtime_config.temperature = args.temperature;
+    runtime_config.top_p = args.top_p;
+    runtime_config.top_k = args.top_k;
+    runtime_config.repetition_penalty = args.repeat_penalty;
+    runtime_config.presence_penalty = args.presence_penalty;
+    runtime_config.frequency_penalty = args.frequency_penalty;
+    runtime_config.no_repeat_ngram_size = args.no_repeat_ngram;
+    runtime_config.device_ids = args.devices;
+    runtime_config.memory_fraction = args.memory_fraction;
+    runtime_config.kv_cache_dtype =
+        ember::dtype_from_string(model_config.torch_dtype);
+    if (runtime_config.kv_cache_dtype == ember::DType::UNKNOWN) {
+        runtime_config.kv_cache_dtype = ember::DType::F16;
+    }
+    runtime_config.kv_cache_dtype = runtime_config.compute_dtype;
+    runtime_config.check_correctness = args.check_mode;
+    runtime_config.dump_layer = args.dump_layer;
+    runtime_config.dump_dir = args.dump_dir;
+
+    ember::Session session;
+    session.init(model_config, runtime_config);
 }
