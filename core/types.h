@@ -23,5 +23,6 @@ inline DType dtype_from_string(const std::string& s) {
     if (s == "int4" || s == "INT4") return DType::INT4;
     return DType::UNKNOWN;
 }
+constexpr int DEVICE_CPU = -1;
 
 }  // namespace ember

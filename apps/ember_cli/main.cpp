@@ -8,6 +8,7 @@
 #include "core/config.h"
 #include "core/error.h"
 #include "core/types.h"
+#include "core/session.h"
 #include "runtime/iruntime.h"
 
 namespace fs = std::filesystem;
@@ -313,7 +314,7 @@ int main(int argc, char** argv) {
     }
 
     auto mem_est = runtime->estimate_memory(model_config, args.ctx_size, 1);
-    std::cout << mem_set.to_string() << "\n";
+    std::cout << mem_est.to_string() << "\n";
 
     std::cout << "[Loading] Model from " << args.model_path << "...\n";
     auto start_load = std::chrono::high_resolution_clock::now();
@@ -353,4 +354,6 @@ int main(int argc, char** argv) {
 
     ember::Session session;
     session.init(model_config, runtime_config);
+
+    
 }

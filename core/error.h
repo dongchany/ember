@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <utility>
+
 namespace ember {
 enum class ErrorCode {
     OK = 0,
@@ -39,12 +42,24 @@ class Error {
     Error(ErrorCode code, std::string message)
         : code_(code), message_(std::move(message)) {}
 
-    const std::string& message() const {return message_;}
+    ErrorCode code() const { return code_; }
+    const std::string& message() const { return message_; }
 
     static Error success() { return Error(); }
 
     static Error cuda_error(const std::string& msg) {
         return Error(ErrorCode::CUDA_ERROR, msg);
+    }
+
+    bool ok() const { return code_ == ErrorCode::OK; }
+    explicit operator bool() const { return !ok(); }  // if (error) 表示有错误
+
+    static Error file_not_found(const std::string& path) {
+        return Error(ErrorCode::FILE_NOT_FOUND, "File not found: " + path);
+    }
+
+    static Error out_of_memory(const std::string& msg = "") {
+        return Error(ErrorCode::OUT_OF_MEMORY, msg);
     }
 
    private:

@@ -19,13 +19,31 @@ include_directories(${CUDAToolkit_INCLUDE_DIRS})
 # =============================================================================
 # Core lib
 # =============================================================================
-set(CORE_SOURCES core/config_loader.cpp)
+set(CORE_SOURCES core/config_loader.cpp formats/safetensors.cpp)
 
-add_executable(ember main.cpp cli/args.cpp)
-target_link_libraries(ember PRIVATE
-    CUDA::cudart
-    CUDA::cublas
+add_library(ember_core STATIC ${CORE_SOURCES})
+target_include_directories(ember_core PUBLIC ${CMAKE_SOURCE_DIR})
+
+add_executable(ember
+        apps/ember_cli/main.cpp
+        cli/args.cpp
 )
+target_link_libraries(ember PRIVATE
+        ember_core
+        CUDA::cudart
+        CUDA::cublas
+)
+
+# =============================================================================
+# CPU/CUDA Tests (no external deps)
+# =============================================================================
+add_executable(ember_tests tests/test_cpu.cpp)
+target_link_libraries(ember_tests PRIVATE ember_core)
+
+enable_testing()
+add_test(NAME ember_tests COMMAND ember_tests)
+set_tests_properties(ember_tests PROPERTIES LABELS "cpu")
+
 
 install(TARGETS ember DESTINATION bin)
 

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "types.h"
+#include <vector>
+
 namespace ember {
 // Model Configuration (read from config.json in the model directory or
 // constructed from presets)
