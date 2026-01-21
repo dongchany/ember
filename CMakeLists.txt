@@ -44,6 +44,12 @@ enable_testing()
 add_test(NAME ember_tests COMMAND ember_tests)
 set_tests_properties(ember_tests PROPERTIES LABELS "cpu")
 
+add_executable(ember_cuda_kernels_smoke tests/test_cuda_kernels.cu)
+target_link_libraries(ember_cuda_kernels_smoke PRIVATE ember_kernels)
+
+add_test(NAME ember_cuda_kernels_smoke COMMAND ember_cuda_kernels_smoke)
+set_tests_properties(ember_cuda_kernels_smoke PROPERTIES LABELS "gpu")
+
 
 install(TARGETS ember DESTINATION bin)
 
