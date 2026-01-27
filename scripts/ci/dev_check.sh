@@ -15,7 +15,7 @@ scripts/ci/build.sh
 echo "[dev-check] CPU tests"
 "${BUILD_DIR}/ember_tests"
 
-if [[ "${RUN_KERNEL_SMOKE}" != "0"]]; then
+if [[ "${RUN_KERNEL_SMOKE}" != "0" ]]; then
     echo "[dev-check] CUDA kernel smoke"
     "${BUILD_DIR}/ember_cuda_kernels_smoke"
 fi

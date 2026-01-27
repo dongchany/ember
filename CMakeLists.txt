@@ -17,6 +17,15 @@ include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CUDAToolkit_INCLUDE_DIRS})
 
 # =============================================================================
+# CUDA Kernels static lib
+# =============================================================================
+set(KERNEL_SOURCES backends/cuda/kernels/ops.cu)
+
+add_library(ember_kernels STATIC ${KERNEL_SOURCES})
+target_include_directories(ember_kernels PUBLIC ${CMAKE_SOURCE_DIR})
+set_target_properties(ember_kernels PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+
+# =============================================================================
 # Core lib
 # =============================================================================
 set(CORE_SOURCES core/config_loader.cpp formats/safetensors.cpp)
@@ -45,7 +54,7 @@ add_test(NAME ember_tests COMMAND ember_tests)
 set_tests_properties(ember_tests PROPERTIES LABELS "cpu")
 
 add_executable(ember_cuda_kernels_smoke tests/test_cuda_kernels.cu)
-target_link_libraries(ember_cuda_kernels_smoke PRIVATE ember_kernels)
+target_link_libraries(ember_cuda_kernels_smoke PRIVATE ember_kernels CUDA::cudart)
 
 add_test(NAME ember_cuda_kernels_smoke COMMAND ember_cuda_kernels_smoke)
 set_tests_properties(ember_cuda_kernels_smoke PROPERTIES LABELS "gpu")
