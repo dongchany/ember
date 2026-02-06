@@ -173,6 +173,12 @@ GPU 1: Layers 14-27 + LM Head
 - [ ] M2: 量化支持 (INT8/INT4)
 - [ ] M3: FlashAttention 优化
 
+## 引用
+
+如果你在论文/报告中使用 Ember，可引用 Zenodo 归档：
+
+- DOI: https://doi.org/10.5281/zenodo.18477269
+
 ## 许可证
 
 Apache-2.0 
