@@ -29,6 +29,10 @@ void print_usage(const char* prog) {
     std::cout << "Input:\n";
     std::cout << "  -p, --prompt TEXT       Input prompt\n";
     std::cout << "  -i, --interactive       Interactive mode\n\n";
+    std::cout << "Scheduler:\n";
+    std::cout << "  --phase-aware           Enable PhaseAwareScheduler (prefill path)\n";
+    std::cout << "  --prefill-chunk-len N   Chunk length for pipeline prefill (default: 128)\n";
+    std::cout << "  --no-prefill-overlap    Disable prefill overlap (default: enabled)\n\n";
     std::cout << "Debug:\n";
     std::cout << "  -v, --verbose           Verbose output\n";
     std::cout << "  --check                 Correctness check mode\n";
@@ -110,6 +114,16 @@ bool parse_args(int argc, char** argv, Args& args) {
         }
         else if (arg == "-i" || arg == "--interactive") {
             args.interactive = true;
+        }
+        else if (arg == "--phase-aware") {
+            args.phase_aware = true;
+        }
+        else if (arg == "--prefill-chunk-len") {
+            if (++i >= argc) { std::cerr << "Missing prefill-chunk-len\n"; return false; }
+            args.prefill_chunk_len = std::stoi(argv[i]);
+        }
+        else if (arg == "--no-prefill-overlap") {
+            args.prefill_overlap = false;
         }
         else if (arg == "--check") {
             args.check_mode = true;

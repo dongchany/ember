@@ -23,6 +23,9 @@ struct Args {
     bool verbose = false;
     bool interactive = false;
     bool check_mode = false;
+    bool phase_aware = false;
+    int prefill_chunk_len = 128;
+    bool prefill_overlap = true;
     bool temperature_set = false;
     bool top_p_set = false;
     bool top_k_set = false;
