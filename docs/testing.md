@@ -163,6 +163,10 @@ to get per-layer intermediate diffs.
 Use this when a GPU correctness check fails and you want to localize the issue to
 a specific layer and its sub-ops (attn/MLP intermediates).
 
+Notes:
+- "dump" means saving intermediate tensors (typically the last token vector) to files.
+- "dump layer" selects which layer to dump. Use `-1` to dump all layers (slower, more files).
+
 ```
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
 LAYER=2 \
