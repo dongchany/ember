@@ -1,11 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BUILD_DIR="${BUILD_DIR:-build-ci}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+cd "${REPO_ROOT}"
+
+BUILD_DIR="${BUILD_DIR:-}"
 MODEL_PATHS="${MODEL_PATHS:-}"
 MODEL_PATH="${MODEL_PATH:-}"
 RUN_HIDDEN_COMPARE="${RUN_HIDDEN_COMPARE:-1}"
 HIDDEN_LAYER="${HIDDEN_LAYER:-2}"
+
+if [[ -z "${BUILD_DIR}" ]]; then
+  if [[ -x "build/ember" ]]; then
+    BUILD_DIR="build"
+  elif [[ -x "build-ci/ember" ]]; then
+    BUILD_DIR="build-ci"
+  else
+    BUILD_DIR="build"
+  fi
+fi
 
 models=()
 if [[ -n "${MODEL_PATHS}" ]]; then
@@ -41,7 +55,7 @@ for raw_model in "${models[@]}"; do
   "${BIN}" -m "${MODEL_PATH}" --check --dump-layer "${HIDDEN_LAYER}" --dump-dir "${dump_dir}" -p "Hello, my name is"
 
   if command -v python3 >/dev/null 2>&1; then
-    if python3 - <<'PY' >/dev/null 2>&1; then
+    if python3 - <<'PY' >/dev/null 2>&1
 import importlib
 import sys
 sys.exit(0 if importlib.util.find_spec("transformers") else 1)

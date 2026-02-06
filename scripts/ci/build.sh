@@ -45,4 +45,4 @@ if [[ "${needs_configure}" == "1" ]]; then
 else
   log_notice "CMake configure skipped (cache is up-to-date)."
 fi
-cmake --build "${BUILD_DIR}" -j
+cmake --build "${BUILD_DIR}" --parallel

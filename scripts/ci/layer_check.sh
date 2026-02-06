@@ -37,7 +37,7 @@ echo "[layer-check] Running ember --check (layer ${LAYER})"
 "${BIN}" -m "${MODEL_PATH}" --check --dump-layer "${LAYER}" --dump-dir "${DUMP_DIR}" -p "${PROMPT}"
 
 if command -v python3 >/dev/null 2>&1; then
-  if python3 - <<'PY' >/dev/null 2>&1; then
+  if python3 - <<'PY' >/dev/null 2>&1
 import importlib
 import sys
 sys.exit(0 if importlib.util.find_spec("transformers") else 1)

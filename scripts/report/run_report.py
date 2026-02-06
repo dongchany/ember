@@ -476,7 +476,7 @@ def main() -> int:
     # Build.
     if not args.skip_build:
         run(["cmake", "-S", ".", "-B", str(build_dir), "-DCMAKE_BUILD_TYPE=Release"], cwd=repo, log_path=logs_dir / "build_configure.log", progress=args.progress)
-        run(["cmake", "--build", str(build_dir), "-j"], cwd=repo, log_path=logs_dir / "build_build.log", progress=args.progress)
+        run(["cmake", "--build", str(build_dir), "--parallel"], cwd=repo, log_path=logs_dir / "build_build.log", progress=args.progress)
 
     # Resolve binaries.
     bin_phase = build_dir / "ember_phase_analysis"
