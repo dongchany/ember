@@ -1,8 +1,8 @@
 #pragma once
 
 #include "../core/error.h"
-#include "../core/types.h"
 #include "../core/tensor.h"
+#include "../core/types.h"
 #include <string>
 #include <vector>
 #include <unordered_map>
