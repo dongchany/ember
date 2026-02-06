@@ -1,6 +1,10 @@
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -11,7 +15,7 @@
 namespace {
 
 class TestFailure : public std::runtime_error {
-   public:
+public:
     explicit TestFailure(const std::string& msg) : std::runtime_error(msg) {}
 };
 
@@ -37,14 +41,32 @@ void expect_eq(const A& a, const B& b, const char* expr_a, const char* expr_b,
 #define EXPECT_TRUE(cond) expect_true((cond), #cond, __FILE__, __LINE__)
 #define EXPECT_EQ(a, b) expect_eq((a), (b), #a, #b, __FILE__, __LINE__)
 
-class TempFile {
-   public:
+struct TempFile {
     std::filesystem::path path;
 
     explicit TempFile(std::filesystem::path p) : path(std::move(p)) {}
+    TempFile(const TempFile&) = delete;
+    TempFile& operator=(const TempFile&) = delete;
 
     TempFile(TempFile&& other) noexcept : path(std::move(other.path)) {
         other.path.clear();
+    }
+    TempFile& operator=(TempFile&& other) noexcept {
+        if (this != &other) {
+            cleanup();
+            path = std::move(other.path);
+            other.path.clear();
+        }
+        return *this;
+    }
+
+    ~TempFile() { cleanup(); }
+
+    void cleanup() {
+        if (!path.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(path, ec);
+        }
     }
 };
 
@@ -79,6 +101,7 @@ void test_config_loader_defaults() {
     EXPECT_EQ(config.num_kv_heads, config.num_heads);
     EXPECT_EQ(config.head_dim, config.hidden_size / config.num_heads);
 }
+
 void test_config_loader_missing_field() {
     const char* json = R"({
   "model_type": "qwen3",
@@ -179,13 +202,11 @@ void test_safetensors_dtype_map() {
 void test_safetensors_missing_file() {
     auto dir = std::filesystem::temp_directory_path();
     auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    auto path =
-        dir / ("ember_missing_" + std::to_string(stamp) + ".safetensors");
+    auto path = dir / ("ember_missing_" + std::to_string(stamp) + ".safetensors");
     ember::SafetensorsReader reader;
     ember::Error err = reader.open(path.string());
     EXPECT_TRUE(!err.ok());
-    EXPECT_EQ(static_cast<int>(err.code()),
-              static_cast<int>(ember::ErrorCode::FILE_NOT_FOUND));
+    EXPECT_EQ(static_cast<int>(err.code()), static_cast<int>(ember::ErrorCode::FILE_NOT_FOUND));
 }
 
 struct TestCase {

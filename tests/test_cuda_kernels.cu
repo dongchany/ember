@@ -1,5 +1,11 @@
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
+#include <cublas_v2.h>
+
 #include <algorithm>
+#include <cmath>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include "backends/cuda/kernels/kernels.h"
@@ -844,31 +850,16 @@ int main() {
     }
 
     bool ok = true;
-    // ═══════════════════════════════════════════════════════
-    // 第1层: 最基础的工具函数（无任何依赖）
-    // ═══════════════════════════════════════════════════════
-    ok &= test_convert_f16();  // FP32↔FP16 转换，最基础
-    ok &= test_elementwise();  // 加法/乘法，极其简单
-
-    // ═══════════════════════════════════════════════════════
-    // 第2层: 独立的数学算子（只依赖基础数学）
-    // ═══════════════════════════════════════════════════════
-    ok &= test_silu();     // 激活函数，独立
-    ok &= test_softmax();  // 独立算子
-    ok &= test_rmsnorm();  // 独立算子
-    ok &= test_rope();     // 独立算子
-
-    // ═══════════════════════════════════════════════════════
-    // 第3层: 数据搬运类（逻辑简单但形状重要）
-    // ═══════════════════════════════════════════════════════
-    ok &= test_embedding_lookup();  // token → embedding
-    ok &= test_copy_last_hidden();  // 取最后位置
-    ok &= test_update_kv_cache();   // 缓存更新
-
-    // ═══════════════════════════════════════════════════════
-    // 第4层: 复杂组合算子（依赖上层全部正确）
-    // ═══════════════════════════════════════════════════════
-    ok &= test_attention();  // 最复杂，依赖softmax等
+    ok &= test_update_kv_cache();
+    ok &= test_attention();
+    ok &= test_silu();
+    ok &= test_elementwise();
+    ok &= test_embedding_lookup();
+    ok &= test_copy_last_hidden();
+    ok &= test_convert_f16();
+    ok &= test_rmsnorm();
+    ok &= test_softmax();
+    ok &= test_rope();
 
     if (ok) {
         std::cout << "[PASS] cuda kernels smoke test\n";
