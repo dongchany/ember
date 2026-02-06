@@ -2,6 +2,35 @@
 
 轻量级 Qwen3 CUDA 推理引擎，专为消费级多 GPU（如双卡 RTX 3080Ti）设计。
 
+## 快速开始
+
+1) 编译（以 RTX 3080Ti 为例，SM=86）：
+
+```bash
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+```
+
+2) 下载模型（safetensors 格式，首次可能需要先 `huggingface-cli login`）：
+
+```bash
+# 若未安装 huggingface-cli：pip install -U huggingface_hub
+huggingface-cli download Qwen/Qwen3-0.6B --local-dir ./qwen3-0.6b
+```
+
+3) 运行：
+
+```bash
+./build/ember -m ./qwen3-0.6b -p "Hello, my name is"
+```
+
+## 文档
+
+- [开发指南](docs/development.md)
+- [测试与回归](docs/testing.md)
+- [架构概览](docs/architecture.md)
+- [采样器解析](docs/sampler_explanation.md)
+
 ## 特性
 
 - **原生 CUDA 实现**：完全控制计算流程，不依赖 ggml/llama.cpp
@@ -14,32 +43,17 @@
 
 ```
 ember/
-├── CMakeLists.txt          # 构建配置
-├── main.cpp                # CLI 入口
+├── apps/ember_cli/         # CLI 入口（main.cpp）
+├── cli/                    # CLI 参数解析
 ├── core/                   # 核心抽象（纯 C++，不依赖 CUDA）
-│   ├── types.h             # DType 枚举、工具函数
-│   ├── error.h             # Error 类、Result<T> 模板
-│   ├── tensor.h            # 轻量 Tensor 视图
-│   ├── config.h            # ModelConfig、RuntimeConfig
-│   ├── session.h           # KV Cache、推理会话
-│   ├── tokenizer.h         # ITokenizer 接口
-│   └── sampler.h           # 采样器（temperature/top-k/top-p）
-├── runtime/
-│   └── iruntime.h          # IRuntime 接口、DeviceMap、MemoryEstimate
-├── formats/
-│   ├── safetensors.h       # Safetensors 加载器
-│   └── safetensors.cpp
-└── backends/cuda/
-    ├── cuda_utils.h        # CUDA 工具函数
-    ├── cuda_runtime.h      # CUDA Runtime 声明
-    ├── cuda_runtime.cpp    # CUDA Runtime 实现
-    └── kernels/
-        ├── kernels.h       # Kernel 函数声明
-        ├── rmsnorm.cu      # RMSNorm kernel
-        ├── rope.cu         # RoPE kernel
-        ├── softmax.cu      # Softmax kernel
-        ├── ops.cu          # SiLU、逐元素操作、Embedding
-        └── attention.cu    # Attention、KV Cache 更新
+├── runtime/                # 调度/设备映射等 runtime 逻辑
+├── formats/                # safetensors/config 等加载
+├── backends/cuda/          # CUDA runtime + kernels
+├── examples/               # 最小可运行示例
+├── benchmarks/             # 性能/互联带宽基准
+├── tests/                  # 单测与 smoke tests
+├── scripts/                # CI/对齐检查脚本
+└── docs/                   # 设计/测试等文档
 ```
 
 ## 构建
@@ -53,9 +67,8 @@ ember/
 ### 编译
 
 ```bash
-mkdir build && cd build
-cmake .. -DCMAKE_CUDA_ARCHITECTURES=86  # RTX 3080Ti
-make -j$(nproc)
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release  # RTX 3080Ti
+cmake --build build --parallel
 ```
 
 CUDA 架构参数：
@@ -69,13 +82,13 @@ CUDA 架构参数：
 
 ```bash
 # 单卡推理
-./ember -m /path/to/qwen3-4b -p "Hello, my name is"
+./build/ember -m /path/to/qwen3-4b -p "Hello, my name is"
 
 # 双卡推理
-./ember -m /path/to/qwen3-14b --devices 0,1 -p "Explain quantum computing"
+./build/ember -m /path/to/qwen3-14b --devices 0,1 -p "Explain quantum computing"
 
 # 交互模式
-./ember -m /path/to/qwen3-4b -i
+./build/ember -m /path/to/qwen3-4b -i
 ```
 
 ### 参数
@@ -105,6 +118,7 @@ CUDA 架构参数：
 
 ```bash
 # 使用 huggingface-cli
+# 若未安装 huggingface-cli：pip install -U huggingface_hub
 huggingface-cli download Qwen/Qwen3-4B --local-dir ./qwen3-4b
 ```
 

@@ -5,7 +5,7 @@ This project uses a layered testing approach.
 ## 1. Build-only check (always run)
 
 ```
-cmake --build build -j
+cmake --build build --parallel
 ```
 
 CI helper:

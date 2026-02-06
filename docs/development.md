@@ -13,7 +13,7 @@ Build:
 ```
 mkdir -p build
 cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86
-cmake --build build -j
+cmake --build build --parallel
 ```
 
 CI-style build (isolated dir):
@@ -29,7 +29,7 @@ scripts/ci/build.sh
 
 ## Code layout
 
-- `main.cpp`: CLI entry point and sampling loop.
+- `apps/ember_cli/main.cpp`: CLI entry point and sampling loop.
 - `core/`: configs, session, sampler, tokenizer.
 - `runtime/`: runtime interface, device map.
 - `formats/`: safetensors loader.
@@ -37,7 +37,7 @@ scripts/ci/build.sh
 
 ## How to add features
 
-1. Add CLI flags in `main.cpp`.
+1. Add CLI flags in `apps/ember_cli/main.cpp`.
 2. Add runtime config fields in `core/config.h`.
 3. Implement kernel changes in `backends/cuda/kernels/`.
 4. Wire into `backends/cuda/cuda_runtime.cpp`.

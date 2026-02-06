@@ -23,7 +23,7 @@ Input IDs
 
 ## Key modules
 
-- `main.cpp`:
+- `apps/ember_cli/main.cpp`:
   CLI entry point, argument parsing, session lifecycle, sampling loop.
 - `core/`:
   - `config.h`: model/runtime config, sampling params.
@@ -53,7 +53,7 @@ Input IDs
 - Tokenization mismatch:
   - `core/tokenizer.h`, `formats/tokenizer.json` handling.
 - Sampling/looping text:
-  - `core/sampler.h` and CLI flags in `main.cpp`.
+  - `core/sampler.h` and CLI flags in `apps/ember_cli/main.cpp`.
 
 ## Multi-GPU
 
