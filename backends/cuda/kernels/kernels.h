@@ -244,6 +244,18 @@ void convert_bf16_to_f32(
 );
 
 // =============================================================================
+// Sampling helpers
+// =============================================================================
+// Greedy argmax over logits (FP32).
+void argmax_f32(
+    int* output_ids,        // [batch]
+    const float* logits,    // [batch, vocab_size]
+    int batch_size,
+    int vocab_size,
+    cudaStream_t stream = nullptr
+);
+
+// =============================================================================
 // Attention
 // =============================================================================
 // Standard attention without FlashAttention

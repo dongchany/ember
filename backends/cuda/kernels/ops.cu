@@ -5,6 +5,58 @@ namespace cuda {
 namespace kernels {
 
 // =============================================================================
+// Greedy Sampling (Argmax)
+// =============================================================================
+
+__global__ void argmax_f32_kernel(int* output_ids, const float* logits, int vocab_size) {
+    const int b = blockIdx.x;
+    const int tid = threadIdx.x;
+
+    float best_val = -1e20f;
+    int best_idx = 0;
+
+    const float* row = logits + static_cast<size_t>(b) * static_cast<size_t>(vocab_size);
+    for (int i = tid; i < vocab_size; i += blockDim.x) {
+        float v = row[i];
+        if (v > best_val) {
+            best_val = v;
+            best_idx = i;
+        }
+    }
+
+    extern __shared__ unsigned char smem[];
+    float* smax = reinterpret_cast<float*>(smem);
+    int* sidx = reinterpret_cast<int*>(smem + blockDim.x * sizeof(float));
+
+    smax[tid] = best_val;
+    sidx[tid] = best_idx;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            const float other_val = smax[tid + stride];
+            const int other_idx = sidx[tid + stride];
+            if (other_val > smax[tid]) {
+                smax[tid] = other_val;
+                sidx[tid] = other_idx;
+            }
+        }
+        __syncthreads();
+    }
+
+    if (tid == 0) {
+        output_ids[b] = sidx[0];
+    }
+}
+
+void argmax_f32(int* output_ids, const float* logits, int batch_size, int vocab_size, cudaStream_t stream) {
+    const int block = 256;
+    const int grid = batch_size;
+    const size_t shmem = static_cast<size_t>(block) * (sizeof(float) + sizeof(int));
+    argmax_f32_kernel<<<grid, block, shmem, stream>>>(output_ids, logits, vocab_size);
+}
+
+// =============================================================================
 // SiLU (Swish) Activation
 // =============================================================================
 
