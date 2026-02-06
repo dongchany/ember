@@ -40,4 +40,5 @@
 # debug information files
 *.dwo
 
-build
+build__pycache__/
+__pycache__/
