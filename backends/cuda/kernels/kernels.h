@@ -132,6 +132,24 @@ void silu_bf16(
 );
 
 // =============================================================================
+// Fused SiLU * Mul (SwiGLU helper)
+// =============================================================================
+// gate = silu(gate) * up (in-place on gate)
+void silu_mul_fused_f16(
+    half* gate_inout,
+    const half* up,
+    int64_t size,
+    cudaStream_t stream = nullptr
+);
+
+void silu_mul_fused_bf16(
+    __nv_bfloat16* gate_inout,
+    const __nv_bfloat16* up,
+    int64_t size,
+    cudaStream_t stream = nullptr
+);
+
+// =============================================================================
 // Element-wise operations
 // =============================================================================
 // output = a * b (element-wise)

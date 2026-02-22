@@ -193,6 +193,7 @@ private:
     Error forward_layer(int layer_idx, int batch_size, int seq_len, int start_pos, Session& session,
                         bool skip_input_copy,
                         const int* start_pos_by_batch = nullptr);
+    Error decode_single_forward_to_lm_head_(int last_token, Session& session);
     Error forward_final_norm(int batch_size, int seq_len, Session& session);
     Error forward_lm_head(int batch_size, int seq_len);
     

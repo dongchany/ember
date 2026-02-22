@@ -191,6 +191,14 @@ target_link_libraries(ember_p2p_bandwidth PRIVATE
     CUDA::cudart
 )
 
+add_executable(ember_kernel_bench
+    benchmarks/kernel_bench.cu
+)
+target_link_libraries(ember_kernel_bench PRIVATE
+    ember_kernels_infer
+    ember_cuda_common
+)
+
 add_executable(ember_phase_analysis
     benchmarks/phase_analysis.cpp
 )

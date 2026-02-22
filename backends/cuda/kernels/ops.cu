@@ -4,6 +4,14 @@ namespace ember {
 namespace cuda {
 namespace kernels {
 
+namespace {
+
+static inline bool is_aligned(const void* ptr, size_t alignment) {
+    return (reinterpret_cast<uintptr_t>(ptr) % alignment) == 0;
+}
+
+}  // namespace
+
 // =============================================================================
 // Greedy Sampling (Argmax)
 // =============================================================================
@@ -60,7 +68,7 @@ void argmax_f32(int* output_ids, const float* logits, int batch_size, int vocab_
 // SiLU (Swish) Activation
 // =============================================================================
 
-__global__ void silu_kernel_f16(half* output, const half* input, int64_t size) {
+__global__ void silu_kernel_f16_scalar(half* output, const half* input, int64_t size) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         float x = __half2float(input[idx]);
@@ -69,13 +77,36 @@ __global__ void silu_kernel_f16(half* output, const half* input, int64_t size) {
     }
 }
 
-void silu_f16(half* output, const half* input, int64_t size, cudaStream_t stream) {
-    const int block_size = 256;
-    const int num_blocks = (size + block_size - 1) / block_size;
-    silu_kernel_f16<<<num_blocks, block_size, 0, stream>>>(output, input, size);
+__global__ void silu_kernel_f16_half2(__half2* output, const __half2* input, int64_t size2) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 x = __half22float2(input[idx]);
+        const float2 sig = make_float2(
+            1.0f / (1.0f + expf(-x.x)),
+            1.0f / (1.0f + expf(-x.y))
+        );
+        output[idx] = __floats2half2_rn(x.x * sig.x, x.y * sig.y);
+    }
 }
 
-__global__ void silu_kernel_bf16(__nv_bfloat16* output, const __nv_bfloat16* input, int64_t size) {
+void silu_f16(half* output, const half* input, int64_t size, cudaStream_t stream) {
+    const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__half2)) &&
+        is_aligned(input, alignof(__half2))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        silu_kernel_f16_half2<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__half2*>(output),
+            reinterpret_cast<const __half2*>(input),
+            size2
+        );
+        return;
+    }
+    const int num_blocks = (size + block_size - 1) / block_size;
+    silu_kernel_f16_scalar<<<num_blocks, block_size, 0, stream>>>(output, input, size);
+}
+
+__global__ void silu_kernel_bf16_scalar(__nv_bfloat16* output, const __nv_bfloat16* input, int64_t size) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
         float x = __bfloat162float(input[idx]);
@@ -84,17 +115,138 @@ __global__ void silu_kernel_bf16(__nv_bfloat16* output, const __nv_bfloat16* inp
     }
 }
 
+__global__ void silu_kernel_bf16_bf162(__nv_bfloat162* output, const __nv_bfloat162* input, int64_t size2) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 x = __bfloat1622float2(input[idx]);
+        const float2 sig = make_float2(
+            1.0f / (1.0f + expf(-x.x)),
+            1.0f / (1.0f + expf(-x.y))
+        );
+        output[idx] = __floats2bfloat162_rn(x.x * sig.x, x.y * sig.y);
+    }
+}
+
 void silu_bf16(__nv_bfloat16* output, const __nv_bfloat16* input, int64_t size, cudaStream_t stream) {
     const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__nv_bfloat162)) &&
+        is_aligned(input, alignof(__nv_bfloat162))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        silu_kernel_bf16_bf162<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__nv_bfloat162*>(output),
+            reinterpret_cast<const __nv_bfloat162*>(input),
+            size2
+        );
+        return;
+    }
     const int num_blocks = (size + block_size - 1) / block_size;
-    silu_kernel_bf16<<<num_blocks, block_size, 0, stream>>>(output, input, size);
+    silu_kernel_bf16_scalar<<<num_blocks, block_size, 0, stream>>>(output, input, size);
+}
+
+// =============================================================================
+// Fused SiLU * Mul (SwiGLU helper)
+// =============================================================================
+
+__global__ void silu_mul_fused_kernel_f16_scalar(half* gate_inout, const half* up, int64_t size) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        const float x = __half2float(gate_inout[idx]);
+        const float u = __half2float(up[idx]);
+        const float sig = 1.0f / (1.0f + expf(-x));
+        const float silu_f = x * sig;
+        const __half silu_h = __float2half(silu_f);          // match non-fused path rounding
+        const float silu_q = __half2float(silu_h);
+        gate_inout[idx] = __float2half(silu_q * u);
+    }
+}
+
+__global__ void silu_mul_fused_kernel_f16_half2(__half2* gate_inout, const __half2* up, int64_t size2) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 x = __half22float2(gate_inout[idx]);
+        const float2 u = __half22float2(up[idx]);
+        const float2 sig = make_float2(
+            1.0f / (1.0f + expf(-x.x)),
+            1.0f / (1.0f + expf(-x.y))
+        );
+        const float2 silu_f = make_float2(x.x * sig.x, x.y * sig.y);
+        const __half2 silu_h2 = __floats2half2_rn(silu_f.x, silu_f.y);  // match non-fused path rounding
+        const float2 silu_q = __half22float2(silu_h2);
+        gate_inout[idx] = __floats2half2_rn(silu_q.x * u.x, silu_q.y * u.y);
+    }
+}
+
+void silu_mul_fused_f16(half* gate_inout, const half* up, int64_t size, cudaStream_t stream) {
+    const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(gate_inout, alignof(__half2)) &&
+        is_aligned(up, alignof(__half2))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        silu_mul_fused_kernel_f16_half2<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__half2*>(gate_inout),
+            reinterpret_cast<const __half2*>(up),
+            size2
+        );
+        return;
+    }
+    const int num_blocks = (size + block_size - 1) / block_size;
+    silu_mul_fused_kernel_f16_scalar<<<num_blocks, block_size, 0, stream>>>(gate_inout, up, size);
+}
+
+__global__ void silu_mul_fused_kernel_bf16_scalar(__nv_bfloat16* gate_inout, const __nv_bfloat16* up, int64_t size) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size) {
+        const float x = __bfloat162float(gate_inout[idx]);
+        const float u = __bfloat162float(up[idx]);
+        const float sig = 1.0f / (1.0f + expf(-x));
+        const float silu_f = x * sig;
+        const __nv_bfloat16 silu_h = __float2bfloat16_rn(silu_f);  // match non-fused path rounding
+        const float silu_q = __bfloat162float(silu_h);
+        gate_inout[idx] = __float2bfloat16_rn(silu_q * u);
+    }
+}
+
+__global__ void silu_mul_fused_kernel_bf16_bf162(
+    __nv_bfloat162* gate_inout, const __nv_bfloat162* up, int64_t size2
+) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 x = __bfloat1622float2(gate_inout[idx]);
+        const float2 u = __bfloat1622float2(up[idx]);
+        const float2 sig = make_float2(
+            1.0f / (1.0f + expf(-x.x)),
+            1.0f / (1.0f + expf(-x.y))
+        );
+        const float2 silu_f = make_float2(x.x * sig.x, x.y * sig.y);
+        const __nv_bfloat162 silu_h2 = __floats2bfloat162_rn(silu_f.x, silu_f.y);  // match rounding
+        const float2 silu_q = __bfloat1622float2(silu_h2);
+        gate_inout[idx] = __floats2bfloat162_rn(silu_q.x * u.x, silu_q.y * u.y);
+    }
+}
+
+void silu_mul_fused_bf16(__nv_bfloat16* gate_inout, const __nv_bfloat16* up, int64_t size, cudaStream_t stream) {
+    const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(gate_inout, alignof(__nv_bfloat162)) &&
+        is_aligned(up, alignof(__nv_bfloat162))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        silu_mul_fused_kernel_bf16_bf162<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__nv_bfloat162*>(gate_inout),
+            reinterpret_cast<const __nv_bfloat162*>(up),
+            size2
+        );
+        return;
+    }
+    const int num_blocks = (size + block_size - 1) / block_size;
+    silu_mul_fused_kernel_bf16_scalar<<<num_blocks, block_size, 0, stream>>>(gate_inout, up, size);
 }
 
 // =============================================================================
 // Element-wise Multiply
 // =============================================================================
 
-__global__ void elementwise_mul_kernel_f16(
+__global__ void elementwise_mul_kernel_f16_scalar(
     half* output, const half* a, const half* b, int64_t size
 ) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -105,15 +257,38 @@ __global__ void elementwise_mul_kernel_f16(
     }
 }
 
+__global__ void elementwise_mul_kernel_f16_half2(
+    __half2* output, const __half2* a, const __half2* b, int64_t size2
+) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 va = __half22float2(a[idx]);
+        const float2 vb = __half22float2(b[idx]);
+        output[idx] = __floats2half2_rn(va.x * vb.x, va.y * vb.y);
+    }
+}
+
 void elementwise_mul_f16(
     half* output, const half* a, const half* b, int64_t size, cudaStream_t stream
 ) {
     const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__half2)) && is_aligned(a, alignof(__half2)) &&
+        is_aligned(b, alignof(__half2))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        elementwise_mul_kernel_f16_half2<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__half2*>(output),
+            reinterpret_cast<const __half2*>(a),
+            reinterpret_cast<const __half2*>(b),
+            size2
+        );
+        return;
+    }
     const int num_blocks = (size + block_size - 1) / block_size;
-    elementwise_mul_kernel_f16<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
+    elementwise_mul_kernel_f16_scalar<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
 }
 
-__global__ void elementwise_mul_kernel_bf16(
+__global__ void elementwise_mul_kernel_bf16_scalar(
     __nv_bfloat16* output, const __nv_bfloat16* a, const __nv_bfloat16* b, int64_t size
 ) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -124,19 +299,42 @@ __global__ void elementwise_mul_kernel_bf16(
     }
 }
 
+__global__ void elementwise_mul_kernel_bf16_bf162(
+    __nv_bfloat162* output, const __nv_bfloat162* a, const __nv_bfloat162* b, int64_t size2
+) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 va = __bfloat1622float2(a[idx]);
+        const float2 vb = __bfloat1622float2(b[idx]);
+        output[idx] = __floats2bfloat162_rn(va.x * vb.x, va.y * vb.y);
+    }
+}
+
 void elementwise_mul_bf16(
     __nv_bfloat16* output, const __nv_bfloat16* a, const __nv_bfloat16* b, int64_t size, cudaStream_t stream
 ) {
     const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__nv_bfloat162)) &&
+        is_aligned(a, alignof(__nv_bfloat162)) && is_aligned(b, alignof(__nv_bfloat162))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        elementwise_mul_kernel_bf16_bf162<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__nv_bfloat162*>(output),
+            reinterpret_cast<const __nv_bfloat162*>(a),
+            reinterpret_cast<const __nv_bfloat162*>(b),
+            size2
+        );
+        return;
+    }
     const int num_blocks = (size + block_size - 1) / block_size;
-    elementwise_mul_kernel_bf16<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
+    elementwise_mul_kernel_bf16_scalar<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
 }
 
 // =============================================================================
 // Element-wise Add
 // =============================================================================
 
-__global__ void elementwise_add_kernel_f16(
+__global__ void elementwise_add_kernel_f16_scalar(
     half* output, const half* a, const half* b, int64_t size
 ) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -147,15 +345,38 @@ __global__ void elementwise_add_kernel_f16(
     }
 }
 
+__global__ void elementwise_add_kernel_f16_half2(
+    __half2* output, const __half2* a, const __half2* b, int64_t size2
+) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 va = __half22float2(a[idx]);
+        const float2 vb = __half22float2(b[idx]);
+        output[idx] = __floats2half2_rn(va.x + vb.x, va.y + vb.y);
+    }
+}
+
 void elementwise_add_f16(
     half* output, const half* a, const half* b, int64_t size, cudaStream_t stream
 ) {
     const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__half2)) && is_aligned(a, alignof(__half2)) &&
+        is_aligned(b, alignof(__half2))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        elementwise_add_kernel_f16_half2<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__half2*>(output),
+            reinterpret_cast<const __half2*>(a),
+            reinterpret_cast<const __half2*>(b),
+            size2
+        );
+        return;
+    }
     const int num_blocks = (size + block_size - 1) / block_size;
-    elementwise_add_kernel_f16<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
+    elementwise_add_kernel_f16_scalar<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
 }
 
-__global__ void elementwise_add_kernel_bf16(
+__global__ void elementwise_add_kernel_bf16_scalar(
     __nv_bfloat16* output, const __nv_bfloat16* a, const __nv_bfloat16* b, int64_t size
 ) {
     const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -166,12 +387,35 @@ __global__ void elementwise_add_kernel_bf16(
     }
 }
 
+__global__ void elementwise_add_kernel_bf16_bf162(
+    __nv_bfloat162* output, const __nv_bfloat162* a, const __nv_bfloat162* b, int64_t size2
+) {
+    const int64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < size2) {
+        const float2 va = __bfloat1622float2(a[idx]);
+        const float2 vb = __bfloat1622float2(b[idx]);
+        output[idx] = __floats2bfloat162_rn(va.x + vb.x, va.y + vb.y);
+    }
+}
+
 void elementwise_add_bf16(
     __nv_bfloat16* output, const __nv_bfloat16* a, const __nv_bfloat16* b, int64_t size, cudaStream_t stream
 ) {
     const int block_size = 256;
+    if (size > 0 && (size % 2 == 0) && is_aligned(output, alignof(__nv_bfloat162)) &&
+        is_aligned(a, alignof(__nv_bfloat162)) && is_aligned(b, alignof(__nv_bfloat162))) {
+        const int64_t size2 = size / 2;
+        const int num_blocks = (size2 + block_size - 1) / block_size;
+        elementwise_add_kernel_bf16_bf162<<<num_blocks, block_size, 0, stream>>>(
+            reinterpret_cast<__nv_bfloat162*>(output),
+            reinterpret_cast<const __nv_bfloat162*>(a),
+            reinterpret_cast<const __nv_bfloat162*>(b),
+            size2
+        );
+        return;
+    }
     const int num_blocks = (size + block_size - 1) / block_size;
-    elementwise_add_kernel_bf16<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
+    elementwise_add_kernel_bf16_scalar<<<num_blocks, block_size, 0, stream>>>(output, a, b, size);
 }
 
 // =============================================================================

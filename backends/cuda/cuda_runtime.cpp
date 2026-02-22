@@ -1704,10 +1704,7 @@ Error CudaRuntime::prefill_into_slot_pipeline(const std::vector<int>& tokens,
     return prefill_chunked_pipeline(tokens, session, chunk_len, overlap, out_logits);
 }
 
-Error CudaRuntime::decode_to_device(int last_token, Session& session) {
-    if (!loaded_) {
-        return Error(ErrorCode::MODEL_NOT_LOADED, "Model not loaded");
-    }
+Error CudaRuntime::decode_single_forward_to_lm_head_(int last_token, Session& session) {
     const int batch_size = 1;
     const int seq_len = 1;
     const int start_pos = session.cur_pos();
@@ -1766,11 +1763,17 @@ Error CudaRuntime::decode_to_device(int last_token, Session& session) {
     if (err) return err;
     err = forward_lm_head(batch_size, seq_len);
     if (err) return err;
+    return Error::success();
+}
 
+Error CudaRuntime::decode_to_device(int last_token, Session& session) {
+    if (!loaded_) {
+        return Error(ErrorCode::MODEL_NOT_LOADED, "Model not loaded");
+    }
+    EMBER_RETURN_IF_ERROR(decode_single_forward_to_lm_head_(last_token, session));
     EMBER_RETURN_IF_ERROR(finalize_stage_profile_(/*sync_all_devices=*/true,
                                                   /*include_final_norm=*/true,
                                                   /*include_lm_head=*/true));
-
     session.advance(1);
     return Error::success();
 }
@@ -1991,75 +1994,11 @@ Error CudaRuntime::decode(int last_token, Session& session, std::vector<float>& 
     if (!loaded_) {
         return Error(ErrorCode::MODEL_NOT_LOADED, "Model not loaded");
     }
-    
-    int batch_size = 1;
-    int seq_len = 1;
-    int start_pos = session.cur_pos();
-    
-    if (start_pos >= session.runtime_config().max_ctx_len) {
-        return Error(ErrorCode::CONTEXT_TOO_LONG, "Context full");
-    }
-    
-    const int max_ctx = session.runtime_config().max_ctx_len;
-    Error err = allocate_activation_buffers(/*max_seq_len=*/1, batch_size, /*attn_q_max=*/1, /*attn_k_max=*/max_ctx);
-    if (err) return err;
-
-    int embed_device = device_map_.embedding_device;
-    auto& act = activations_[embed_device];
 
     if (profile_layers_) {
         last_layer_profile_ms_.assign(static_cast<size_t>(config_.num_layers), 0.0f);
     }
-    EMBER_RETURN_IF_ERROR(begin_stage_profile_());
-    
-    // Embedding lookup (单个 token)
-    int* d_input_id = nullptr;
-    CUDA_CHECK(cudaSetDevice(embed_device));
-    CUDA_CHECK(cudaMalloc(&d_input_id, sizeof(int)));
-    auto h2d_start = std::chrono::high_resolution_clock::now();
-    CUDA_CHECK(cudaMemcpy(d_input_id, &last_token, sizeof(int), cudaMemcpyHostToDevice));
-    auto h2d_end = std::chrono::high_resolution_clock::now();
-    add_stage_profile_h2d_ms_(std::chrono::duration<double, std::milli>(h2d_end - h2d_start).count());
-    
-    if (profile_stages_) {
-        CUDA_CHECK(cudaEventRecord(embedding_events_.start, streams_[embed_device]));
-    }
-    if (weights_.dtype == DType::BF16) {
-        kernels::embedding_lookup_bf16(
-            static_cast<__nv_bfloat16*>(act.hidden_states),
-            static_cast<const __nv_bfloat16*>(weights_.embed_tokens),
-            d_input_id,
-            batch_size, seq_len, config_.hidden_size,
-            streams_[embed_device]
-        );
-    } else {
-        kernels::embedding_lookup_f16(
-            static_cast<half*>(act.hidden_states),
-            static_cast<const half*>(weights_.embed_tokens),
-            d_input_id,
-            batch_size, seq_len, config_.hidden_size,
-            streams_[embed_device]
-        );
-    }
-    if (profile_stages_) {
-        CUDA_CHECK(cudaEventRecord(embedding_events_.end, streams_[embed_device]));
-    }
-    
-    cudaFree(d_input_id);
-    
-    // 逐层前向
-    for (int layer_idx = 0; layer_idx < config_.num_layers; ++layer_idx) {
-        err = forward_layer(layer_idx, batch_size, seq_len, start_pos, session, /*skip_input_copy=*/false);
-        if (err) return err;
-    }
-    
-    // Final norm
-    err = forward_final_norm(batch_size, seq_len, session);
-    if (err) return err;
-    
-    // LM head
-    err = forward_lm_head(batch_size, seq_len);
-    if (err) return err;
+    EMBER_RETURN_IF_ERROR(decode_single_forward_to_lm_head_(last_token, session));
     
     // 同步并拷贝 logits 回 CPU
     int lm_device = device_map_.lm_head_device;

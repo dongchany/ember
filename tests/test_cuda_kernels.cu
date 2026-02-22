@@ -354,6 +354,66 @@ bool test_silu() {
     return true;
 }
 
+bool test_silu_mul_fused() {
+    const int size = 64;
+    std::vector<float> gate_f(size);
+    std::vector<float> up_f(size);
+    for (int i = 0; i < size; ++i) {
+        gate_f[i] = 0.2f * static_cast<float>(i - 17);
+        up_f[i] = -0.15f * static_cast<float>(i - 11);
+    }
+
+    std::vector<float> expected(size);
+    for (int i = 0; i < size; ++i) {
+        // Match non-fused path precisely: inputs are stored as FP16, then:
+        // silu(gate_fp16)->fp16, then mul with up_fp16 -> fp16.
+        const float x = __half2float(__float2half(gate_f[i]));
+        const float u = __half2float(__float2half(up_f[i]));
+        const float sig = 1.0f / (1.0f + std::exp(-x));
+        const float silu = x * sig;
+        half silu_h = __float2half(silu);  // match non-fused path rounding
+        float silu_q = __half2float(silu_h);
+        expected[i] = __half2float(__float2half(silu_q * u));
+    }
+
+    std::vector<half> gate_h(size);
+    std::vector<half> up_h(size);
+    for (int i = 0; i < size; ++i) {
+        gate_h[i] = __float2half(gate_f[i]);
+        up_h[i] = __float2half(up_f[i]);
+    }
+
+    half* d_gate = nullptr;
+    half* d_up = nullptr;
+    if (!cuda_check(cudaMalloc(&d_gate, size * sizeof(half)), "cudaMalloc gate")) return false;
+    if (!cuda_check(cudaMalloc(&d_up, size * sizeof(half)), "cudaMalloc up")) return false;
+    cuda_check(cudaMemcpy(d_gate, gate_h.data(), size * sizeof(half), cudaMemcpyHostToDevice), "cudaMemcpy gate");
+    cuda_check(cudaMemcpy(d_up, up_h.data(), size * sizeof(half), cudaMemcpyHostToDevice), "cudaMemcpy up");
+
+    ember::cuda::kernels::silu_mul_fused_f16(d_gate, d_up, size, nullptr);
+    if (!cuda_check(cudaGetLastError(), "silu_mul_fused_f16 launch")) return false;
+    if (!cuda_check(cudaDeviceSynchronize(), "silu_mul_fused_f16 sync")) return false;
+
+    std::vector<half> out_h(size);
+    cuda_check(cudaMemcpy(out_h.data(), d_gate, size * sizeof(half), cudaMemcpyDeviceToHost), "cudaMemcpy out");
+
+    cudaFree(d_gate);
+    cudaFree(d_up);
+
+    std::vector<float> out_f(size);
+    for (int i = 0; i < size; ++i) {
+        out_f[i] = __half2float(out_h[i]);
+    }
+
+    float diff = max_abs_diff(out_f, expected);
+    if (diff > 1e-2f) {
+        std::cerr << "[FAIL] silu_mul_fused max_abs_diff=" << diff << "\n";
+        return false;
+    }
+    std::cout << "[PASS] silu_mul_fused\n";
+    return true;
+}
+
 bool test_elementwise() {
     const int size = 64;
     std::vector<float> a_f(size);
@@ -853,6 +913,7 @@ int main() {
     ok &= test_update_kv_cache();
     ok &= test_attention();
     ok &= test_silu();
+    ok &= test_silu_mul_fused();
     ok &= test_elementwise();
     ok &= test_embedding_lookup();
     ok &= test_copy_last_hidden();
