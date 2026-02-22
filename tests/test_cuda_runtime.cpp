@@ -25,6 +25,28 @@ bool has_nonfinite(const std::vector<float>& values, size_t& idx) {
     return false;
 }
 
+bool validate_stage_profile(const ember::cuda::CudaRuntime::StageProfileMs& profile,
+                            std::string& reason) {
+    auto check = [&](const char* name, float value) {
+        if (!std::isfinite(value) || value < 0.0f) {
+            std::ostringstream oss;
+            oss << name << " invalid: " << value;
+            reason = oss.str();
+            return false;
+        }
+        return true;
+    };
+    return check("embedding_ms", profile.embedding_ms) &&
+           check("rmsnorm_ms", profile.rmsnorm_ms) &&
+           check("attention_ms", profile.attention_ms) &&
+           check("ffn_ms", profile.ffn_ms) &&
+           check("p2p_ms", profile.p2p_ms) &&
+           check("memcpy_h2d_ms", profile.memcpy_h2d_ms) &&
+           check("memcpy_d2h_ms", profile.memcpy_d2h_ms) &&
+           check("lm_head_ms", profile.lm_head_ms) &&
+           check("total_ms", profile.total_ms);
+}
+
 std::vector<int> make_tokens(int64_t vocab_size) {
     std::vector<int> tokens = {1, 2, 3, 4};
     if (vocab_size <= 0) {
@@ -51,6 +73,11 @@ int main() {
     if (!runtime || !runtime->available()) {
         std::cout << "[skip] No CUDA device available\n";
         return 0;
+    }
+    auto* cuda_rt = dynamic_cast<ember::cuda::CudaRuntime*>(runtime.get());
+    if (!cuda_rt) {
+        fail("expected CUDA runtime implementation");
+        return 1;
     }
 
     std::string config_path = std::string(model_path) + "/config.json";
@@ -87,6 +114,7 @@ int main() {
         return 1;
     }
     ember::Session& session = setup.session;
+    cuda_rt->set_stage_profiling(true);
 
     std::vector<int> tokens = make_tokens(config.vocab_size);
     std::vector<float> logits;
@@ -95,6 +123,20 @@ int main() {
         fail("prefill_with_logits failed: " + err.to_string());
         cleanup();
         return 1;
+    }
+    {
+        std::string reason;
+        auto sp = cuda_rt->take_last_stage_profile_ms();
+        if (!validate_stage_profile(sp, reason)) {
+            fail("prefill stage profile invalid: " + reason);
+            cleanup();
+            return 1;
+        }
+        if (!(sp.total_ms > 0.0f)) {
+            fail("prefill stage profile total_ms should be > 0");
+            cleanup();
+            return 1;
+        }
     }
 
     if (logits.size() != static_cast<size_t>(config.vocab_size)) {
@@ -136,6 +178,20 @@ int main() {
         fail(oss.str());
         cleanup();
         return 1;
+    }
+    {
+        std::string reason;
+        auto sp = cuda_rt->take_last_stage_profile_ms();
+        if (!validate_stage_profile(sp, reason)) {
+            fail("decode stage profile invalid: " + reason);
+            cleanup();
+            return 1;
+        }
+        if (!(sp.total_ms > 0.0f)) {
+            fail("decode stage profile total_ms should be > 0");
+            cleanup();
+            return 1;
+        }
     }
 
     cleanup();

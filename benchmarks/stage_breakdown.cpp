@@ -46,6 +46,9 @@ struct Accum {
     double attention_ms = 0.0;
     double ffn_ms = 0.0;
     double p2p_ms = 0.0;
+    double memcpy_h2d_ms = 0.0;
+    double memcpy_d2h_ms = 0.0;
+    double sampling_ms = 0.0;
     double lm_head_ms = 0.0;
     double prof_total_ms = 0.0;
 };
@@ -57,6 +60,8 @@ void add(Accum& a, double wall_ms, const ember::cuda::CudaRuntime::StageProfileM
     a.attention_ms += sp.attention_ms;
     a.ffn_ms += sp.ffn_ms;
     a.p2p_ms += sp.p2p_ms;
+    a.memcpy_h2d_ms += sp.memcpy_h2d_ms;
+    a.memcpy_d2h_ms += sp.memcpy_d2h_ms;
     a.lm_head_ms += sp.lm_head_ms;
     a.prof_total_ms += sp.total_ms;
 }
@@ -74,6 +79,7 @@ int main(int argc, char** argv) {
     int warmup = 1;
     bool overlap = false;
     bool force_pipeline = false;
+    bool decode_with_sampling = false;
     std::string csv_path;
 
     for (int i = 1; i < argc; ++i) {
@@ -98,6 +104,8 @@ int main(int argc, char** argv) {
                 << "  --no-overlap          disable overlap (default)\n"
                 << "  --pipeline            force 2-GPU chunked prefill pipeline even when --no-overlap\n"
                 << "  --no-pipeline         disable forced pipeline (default)\n"
+                << "  --decode-with-sampling  use decode()+greedy argmax timing (includes D2H + sampling)\n"
+                << "  --decode-no-sampling    use decode_to_device() timing only (default)\n"
                 << "  --iters N             (default: 3)\n"
                 << "  --warmup N            (default: 1)\n"
                 << "  --csv PATH            write CSV (default: stdout)\n";
@@ -126,6 +134,10 @@ int main(int argc, char** argv) {
             force_pipeline = true;
         } else if (arg == "--no-pipeline") {
             force_pipeline = false;
+        } else if (arg == "--decode-with-sampling") {
+            decode_with_sampling = true;
+        } else if (arg == "--decode-no-sampling") {
+            decode_with_sampling = false;
         } else if (arg == "--csv") {
             csv_path = need("--csv");
         } else {
@@ -192,8 +204,9 @@ int main(int argc, char** argv) {
         out = &f;
     }
 
-    *out << "phase,mode,gpus,split,prompt_len,decode_steps,chunk_len,overlap,wall_ms,"
-         << "embedding_ms,rmsnorm_ms,attention_ms,ffn_ms,p2p_ms,lm_head_ms,profile_total_ms\n";
+    *out << "phase,mode,gpus,split,prompt_len,decode_steps,chunk_len,overlap,decode_sampling,wall_ms,"
+         << "embedding_ms,rmsnorm_ms,attention_ms,ffn_ms,p2p_ms,memcpy_h2d_ms,memcpy_d2h_ms,"
+         << "sampling_ms,lm_head_ms,profile_total_ms\n";
 
     std::mt19937 rng(1234);
     std::uniform_int_distribution<int> dist(0, static_cast<int>(config.vocab_size - 1));
@@ -222,14 +235,25 @@ int main(int argc, char** argv) {
     auto run_decode = [&](Accum& acc) {
         if (decode_steps == 0) return;
         cuda_rt->set_stage_profiling(true);
-        std::vector<float> tmp;
         int last = prompt.back();
         auto t0 = std::chrono::high_resolution_clock::now();
         for (int i = 0; i < decode_steps; ++i) {
-            ember::Error e = cuda_rt->decode_to_device(last, setup.session);
-            if (e) die("decode_to_device failed: " + e.to_string());
+            ember::Error e = ember::Error::success();
+            if (decode_with_sampling) {
+                std::vector<float> logits;
+                e = runtime->decode(last, setup.session, logits);
+                if (e) die("decode failed: " + e.to_string());
+                const auto s0 = std::chrono::high_resolution_clock::now();
+                auto it = std::max_element(logits.begin(), logits.end());
+                last = (it == logits.end()) ? 0 : static_cast<int>(std::distance(logits.begin(), it));
+                const auto s1 = std::chrono::high_resolution_clock::now();
+                acc.sampling_ms += std::chrono::duration<double, std::milli>(s1 - s0).count();
+            } else {
+                e = cuda_rt->decode_to_device(last, setup.session);
+                if (e) die("decode_to_device failed: " + e.to_string());
+                last = (last + 1) % static_cast<int>(config.vocab_size);
+            }
             add(acc, 0.0, cuda_rt->take_last_stage_profile_ms());
-            last = (last + 1) % static_cast<int>(config.vocab_size);
         }
         for (int dev : gpus) {
             ember::Error se = ember::cuda::cuda_sync(dev);
@@ -268,12 +292,16 @@ int main(int argc, char** argv) {
         }
         *out << phase << "," << mode << "," << gstr << "," << sstr << ","
              << prompt_len << "," << decode_steps << "," << chunk_len << "," << (overlap ? 1 : 0) << ","
+             << (decode_with_sampling ? 1 : 0) << ","
              << std::fixed << std::setprecision(3) << div(a.wall_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.embedding_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.rmsnorm_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.attention_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.ffn_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.p2p_ms) << ","
+             << std::fixed << std::setprecision(3) << div(a.memcpy_h2d_ms) << ","
+             << std::fixed << std::setprecision(3) << div(a.memcpy_d2h_ms) << ","
+             << std::fixed << std::setprecision(3) << div(a.sampling_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.lm_head_ms) << ","
              << std::fixed << std::setprecision(3) << div(a.prof_total_ms) << "\n";
     };

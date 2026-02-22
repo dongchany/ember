@@ -88,6 +88,8 @@ public:
         float attention_ms = 0.0f;
         float ffn_ms = 0.0f;
         float p2p_ms = 0.0f;
+        float memcpy_h2d_ms = 0.0f;
+        float memcpy_d2h_ms = 0.0f;
         float lm_head_ms = 0.0f;
         float total_ms = 0.0f;
     };
@@ -169,6 +171,12 @@ private:
     void ensure_stage_profiling_events_();
     void ensure_simple_stage_events_(SimpleStageEvents& ev, int device_id);
     void ensure_layer_stage_events_(LayerStageEvents& ev, int device_id);
+    Error begin_stage_profile_();
+    Error finalize_stage_profile_(bool sync_all_devices,
+                                  bool include_final_norm,
+                                  bool include_lm_head);
+    void add_stage_profile_h2d_ms_(double ms);
+    void add_stage_profile_d2h_ms_(double ms);
 
     // 加载模型权重
     Error load_weights(const std::string& model_path);

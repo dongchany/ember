@@ -889,6 +889,85 @@ CudaRuntime::StageProfileMs CudaRuntime::take_last_stage_profile_ms() {
     return out;
 }
 
+Error CudaRuntime::begin_stage_profile_() {
+    if (!profile_stages_) {
+        return Error::success();
+    }
+    ensure_stage_profiling_events_();
+    last_stage_profile_ms_ = {};
+    CUDA_CHECK(cudaSetDevice(total_events_.device_id));
+    CUDA_CHECK(cudaEventRecord(total_events_.start, streams_[total_events_.device_id]));
+    return Error::success();
+}
+
+Error CudaRuntime::finalize_stage_profile_(bool sync_all_devices,
+                                           bool include_final_norm,
+                                           bool include_lm_head) {
+    if (!profile_stages_) {
+        return Error::success();
+    }
+    if (sync_all_devices) {
+        for (int dev = 0; dev < device_map_.num_devices; ++dev) {
+            EMBER_RETURN_IF_ERROR(cuda_sync(dev));
+        }
+    }
+
+    for (int l = 0; l < config_.num_layers; ++l) {
+        const auto& ev = layer_stage_events_[static_cast<size_t>(l)];
+        float ms = 0.0f;
+        CUDA_CHECK(cudaSetDevice(ev.device_id));
+        CUDA_CHECK(cudaEventElapsedTime(&ms, ev.in_norm_start, ev.in_norm_end));
+        last_stage_profile_ms_.rmsnorm_ms += ms;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, ev.post_norm_start, ev.post_norm_end));
+        last_stage_profile_ms_.rmsnorm_ms += ms;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, ev.attn_start, ev.attn_end));
+        last_stage_profile_ms_.attention_ms += ms;
+        CUDA_CHECK(cudaEventElapsedTime(&ms, ev.ffn_start, ev.ffn_end));
+        last_stage_profile_ms_.ffn_ms += ms;
+    }
+
+    float emb_ms = 0.0f;
+    CUDA_CHECK(cudaSetDevice(embedding_events_.device_id));
+    CUDA_CHECK(cudaEventElapsedTime(&emb_ms, embedding_events_.start, embedding_events_.end));
+    last_stage_profile_ms_.embedding_ms = emb_ms;
+
+    if (include_final_norm) {
+        float fn_ms = 0.0f;
+        CUDA_CHECK(cudaSetDevice(final_norm_events_.device_id));
+        CUDA_CHECK(cudaEventElapsedTime(&fn_ms, final_norm_events_.start, final_norm_events_.end));
+        last_stage_profile_ms_.rmsnorm_ms += fn_ms;
+    }
+
+    if (include_lm_head) {
+        float lm_ms = 0.0f;
+        CUDA_CHECK(cudaSetDevice(lm_head_events_.device_id));
+        CUDA_CHECK(cudaEventElapsedTime(&lm_ms, lm_head_events_.start, lm_head_events_.end));
+        last_stage_profile_ms_.lm_head_ms = lm_ms;
+    }
+
+    CUDA_CHECK(cudaSetDevice(total_events_.device_id));
+    CUDA_CHECK(cudaEventRecord(total_events_.end, streams_[total_events_.device_id]));
+    CUDA_CHECK(cudaEventSynchronize(total_events_.end));
+    float total_ms = 0.0f;
+    CUDA_CHECK(cudaEventElapsedTime(&total_ms, total_events_.start, total_events_.end));
+    last_stage_profile_ms_.total_ms = total_ms;
+    return Error::success();
+}
+
+void CudaRuntime::add_stage_profile_h2d_ms_(double ms) {
+    if (!profile_stages_) {
+        return;
+    }
+    last_stage_profile_ms_.memcpy_h2d_ms += static_cast<float>(ms);
+}
+
+void CudaRuntime::add_stage_profile_d2h_ms_(double ms) {
+    if (!profile_stages_) {
+        return;
+    }
+    last_stage_profile_ms_.memcpy_d2h_ms += static_cast<float>(ms);
+}
+
 void CudaRuntime::destroy_stage_profiling_events_() {
     for (auto& ev : layer_stage_events_) {
         if (ev.device_id >= 0) cudaSetDevice(ev.device_id);
@@ -1028,12 +1107,7 @@ Error CudaRuntime::prefill_chunked_pipeline(const std::vector<int>& tokens,
     Error err = allocate_activation_buffers(chunk_len, batch_size, /*attn_q_max=*/chunk_len, /*attn_k_max=*/max_ctx);
     if (err) return err;
 
-    if (profile_stages_) {
-        ensure_stage_profiling_events_();
-        last_stage_profile_ms_ = {};
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.start, streams_[total_events_.device_id]));
-    }
+    EMBER_RETURN_IF_ERROR(begin_stage_profile_());
 
     auto accumulate_layer_stage_ms = [&](int layer_idx) -> Error {
         if (!profile_stages_) return Error::success();
@@ -1648,17 +1722,15 @@ Error CudaRuntime::decode_to_device(int last_token, Session& session) {
     int embed_device = device_map_.embedding_device;
     auto& act = activations_[embed_device];
 
-    if (profile_stages_) {
-        ensure_stage_profiling_events_();
-        last_stage_profile_ms_ = {};
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.start, streams_[total_events_.device_id]));
-    }
+    EMBER_RETURN_IF_ERROR(begin_stage_profile_());
 
     int* d_input_id = nullptr;
     CUDA_CHECK(cudaSetDevice(embed_device));
     CUDA_CHECK(cudaMalloc(&d_input_id, sizeof(int)));
+    auto h2d_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(d_input_id, &last_token, sizeof(int), cudaMemcpyHostToDevice));
+    auto h2d_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_h2d_ms_(std::chrono::duration<double, std::milli>(h2d_end - h2d_start).count());
 
     if (profile_stages_) {
         CUDA_CHECK(cudaEventRecord(embedding_events_.start, streams_[embed_device]));
@@ -1695,47 +1767,9 @@ Error CudaRuntime::decode_to_device(int last_token, Session& session) {
     err = forward_lm_head(batch_size, seq_len);
     if (err) return err;
 
-    if (profile_stages_) {
-        for (int dev = 0; dev < device_map_.num_devices; ++dev) {
-            cuda_sync(dev);
-        }
-
-        for (int l = 0; l < config_.num_layers; ++l) {
-            const auto& ev = layer_stage_events_[static_cast<size_t>(l)];
-            float ms = 0.0f;
-            CUDA_CHECK(cudaSetDevice(ev.device_id));
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.in_norm_start, ev.in_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.post_norm_start, ev.post_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.attn_start, ev.attn_end));
-            last_stage_profile_ms_.attention_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.ffn_start, ev.ffn_end));
-            last_stage_profile_ms_.ffn_ms += ms;
-        }
-
-        float emb_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(embedding_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&emb_ms, embedding_events_.start, embedding_events_.end));
-        last_stage_profile_ms_.embedding_ms = emb_ms;
-
-        float fn_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(final_norm_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&fn_ms, final_norm_events_.start, final_norm_events_.end));
-        last_stage_profile_ms_.rmsnorm_ms += fn_ms;
-
-        float lm_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(lm_head_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&lm_ms, lm_head_events_.start, lm_head_events_.end));
-        last_stage_profile_ms_.lm_head_ms = lm_ms;
-
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.end, streams_[total_events_.device_id]));
-        CUDA_CHECK(cudaEventSynchronize(total_events_.end));
-        float total_ms = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&total_ms, total_events_.start, total_events_.end));
-        last_stage_profile_ms_.total_ms = total_ms;
-    }
+    EMBER_RETURN_IF_ERROR(finalize_stage_profile_(/*sync_all_devices=*/true,
+                                                  /*include_final_norm=*/true,
+                                                  /*include_lm_head=*/true));
 
     session.advance(1);
     return Error::success();
@@ -1786,9 +1820,12 @@ Error CudaRuntime::decode_batch_to_device(const std::vector<int>& last_tokens, S
     int* d_input_ids = nullptr;
     CUDA_CHECK(cudaSetDevice(embed_device));
     CUDA_CHECK(cudaMalloc(&d_input_ids, static_cast<size_t>(batch_size) * sizeof(int)));
+    auto h2d_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(d_input_ids, last_tokens.data(),
                           static_cast<size_t>(batch_size) * sizeof(int),
                           cudaMemcpyHostToDevice));
+    auto h2d_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_h2d_ms_(std::chrono::duration<double, std::milli>(h2d_end - h2d_start).count());
 
     if (weights_.dtype == DType::BF16) {
         kernels::embedding_lookup_bf16(
@@ -1856,12 +1893,7 @@ Error CudaRuntime::prefill(const std::vector<int>& tokens, Session& session) {
     if (profile_layers_) {
         last_layer_profile_ms_.assign(static_cast<size_t>(config_.num_layers), 0.0f);
     }
-    if (profile_stages_) {
-        ensure_stage_profiling_events_();
-        last_stage_profile_ms_ = {};
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.start, streams_[total_events_.device_id]));
-    }
+    EMBER_RETURN_IF_ERROR(begin_stage_profile_());
     
     // 拷贝 input_ids 到 GPU
     input_ids_cpu_ = tokens;
@@ -1870,7 +1902,10 @@ Error CudaRuntime::prefill(const std::vector<int>& tokens, Session& session) {
     
     CUDA_CHECK(cudaSetDevice(embed_device));
     CUDA_CHECK(cudaMalloc(&d_input_ids, seq_len * sizeof(int)));
+    auto h2d_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(d_input_ids, tokens.data(), seq_len * sizeof(int), cudaMemcpyHostToDevice));
+    auto h2d_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_h2d_ms_(std::chrono::duration<double, std::milli>(h2d_end - h2d_start).count());
     
     // Embedding lookup
     auto& act = activations_[embed_device];
@@ -1913,32 +1948,9 @@ Error CudaRuntime::prefill(const std::vector<int>& tokens, Session& session) {
         cuda_sync(dev);
     }
 
-    if (profile_stages_) {
-        for (int l = 0; l < config_.num_layers; ++l) {
-            const auto& ev = layer_stage_events_[static_cast<size_t>(l)];
-            float ms = 0.0f;
-            CUDA_CHECK(cudaSetDevice(ev.device_id));
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.in_norm_start, ev.in_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.post_norm_start, ev.post_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.attn_start, ev.attn_end));
-            last_stage_profile_ms_.attention_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.ffn_start, ev.ffn_end));
-            last_stage_profile_ms_.ffn_ms += ms;
-        }
-        float emb_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(embedding_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&emb_ms, embedding_events_.start, embedding_events_.end));
-        last_stage_profile_ms_.embedding_ms = emb_ms;
-
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.end, streams_[total_events_.device_id]));
-        CUDA_CHECK(cudaEventSynchronize(total_events_.end));
-        float total_ms = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&total_ms, total_events_.start, total_events_.end));
-        last_stage_profile_ms_.total_ms = total_ms;
-    }
+    EMBER_RETURN_IF_ERROR(finalize_stage_profile_(/*sync_all_devices=*/false,
+                                                  /*include_final_norm=*/false,
+                                                  /*include_lm_head=*/false));
     
     // 更新位置
     session.set_cur_pos(start_pos + seq_len);
@@ -1966,8 +1978,11 @@ Error CudaRuntime::prefill_with_logits(const std::vector<int>& tokens, Session& 
     cuda_sync(lm_device);
     
     logits.resize(config_.vocab_size);
+    auto d2h_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(logits.data(), activations_[lm_device].logits, 
                           config_.vocab_size * sizeof(float), cudaMemcpyDeviceToHost));
+    auto d2h_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_d2h_ms_(std::chrono::duration<double, std::milli>(d2h_end - d2h_start).count());
     
     return Error::success();
 }
@@ -1995,18 +2010,16 @@ Error CudaRuntime::decode(int last_token, Session& session, std::vector<float>& 
     if (profile_layers_) {
         last_layer_profile_ms_.assign(static_cast<size_t>(config_.num_layers), 0.0f);
     }
-    if (profile_stages_) {
-        ensure_stage_profiling_events_();
-        last_stage_profile_ms_ = {};
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.start, streams_[total_events_.device_id]));
-    }
+    EMBER_RETURN_IF_ERROR(begin_stage_profile_());
     
     // Embedding lookup (单个 token)
     int* d_input_id = nullptr;
     CUDA_CHECK(cudaSetDevice(embed_device));
     CUDA_CHECK(cudaMalloc(&d_input_id, sizeof(int)));
+    auto h2d_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(d_input_id, &last_token, sizeof(int), cudaMemcpyHostToDevice));
+    auto h2d_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_h2d_ms_(std::chrono::duration<double, std::milli>(h2d_end - h2d_start).count());
     
     if (profile_stages_) {
         CUDA_CHECK(cudaEventRecord(embedding_events_.start, streams_[embed_device]));
@@ -2059,46 +2072,15 @@ Error CudaRuntime::decode(int last_token, Session& session, std::vector<float>& 
     }
     
     logits.resize(config_.vocab_size);
+    auto d2h_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(logits.data(), activations_[lm_device].logits, 
                           config_.vocab_size * sizeof(float), cudaMemcpyDeviceToHost));
+    auto d2h_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_d2h_ms_(std::chrono::duration<double, std::milli>(d2h_end - d2h_start).count());
 
-    if (profile_stages_) {
-        for (int l = 0; l < config_.num_layers; ++l) {
-            const auto& ev = layer_stage_events_[static_cast<size_t>(l)];
-            float ms = 0.0f;
-            CUDA_CHECK(cudaSetDevice(ev.device_id));
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.in_norm_start, ev.in_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.post_norm_start, ev.post_norm_end));
-            last_stage_profile_ms_.rmsnorm_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.attn_start, ev.attn_end));
-            last_stage_profile_ms_.attention_ms += ms;
-            CUDA_CHECK(cudaEventElapsedTime(&ms, ev.ffn_start, ev.ffn_end));
-            last_stage_profile_ms_.ffn_ms += ms;
-        }
-
-        float emb_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(embedding_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&emb_ms, embedding_events_.start, embedding_events_.end));
-        last_stage_profile_ms_.embedding_ms = emb_ms;
-
-        float fn_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(final_norm_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&fn_ms, final_norm_events_.start, final_norm_events_.end));
-        last_stage_profile_ms_.rmsnorm_ms += fn_ms;
-
-        float lm_ms = 0.0f;
-        CUDA_CHECK(cudaSetDevice(lm_head_events_.device_id));
-        CUDA_CHECK(cudaEventElapsedTime(&lm_ms, lm_head_events_.start, lm_head_events_.end));
-        last_stage_profile_ms_.lm_head_ms = lm_ms;
-
-        CUDA_CHECK(cudaSetDevice(total_events_.device_id));
-        CUDA_CHECK(cudaEventRecord(total_events_.end, streams_[total_events_.device_id]));
-        CUDA_CHECK(cudaEventSynchronize(total_events_.end));
-        float total_ms = 0.0f;
-        CUDA_CHECK(cudaEventElapsedTime(&total_ms, total_events_.start, total_events_.end));
-        last_stage_profile_ms_.total_ms = total_ms;
-    }
+    EMBER_RETURN_IF_ERROR(finalize_stage_profile_(/*sync_all_devices=*/false,
+                                                  /*include_final_norm=*/true,
+                                                  /*include_lm_head=*/true));
     
     // 更新位置
     session.advance(1);
@@ -2710,58 +2692,72 @@ Error CudaRuntime::forward_layer(int layer_idx,
         if (err) return err;
     }
     
-    // SiLU on gate
-    if (compute_dtype == DType::BF16) {
-        kernels::silu_bf16(
-            static_cast<__nv_bfloat16*>(act.mlp_gate),
-            static_cast<const __nv_bfloat16*>(act.mlp_gate),
-            batch_size * seq_len * intermediate_size,
-            stream
-        );
-    } else {
-        kernels::silu_f16(
-            static_cast<half*>(act.mlp_gate),
-            static_cast<const half*>(act.mlp_gate),
-            batch_size * seq_len * intermediate_size,
-            stream
-        );
-    }
+    const bool dump_mlp_intermediates =
+        session.runtime_config().check_correctness && session.runtime_config().dump_layer == layer_idx;
+    if (dump_mlp_intermediates) {
+        // Debug path: keep intermediate tensors materialized for compare_hidden.py.
+        if (compute_dtype == DType::BF16) {
+            kernels::silu_bf16(
+                static_cast<__nv_bfloat16*>(act.mlp_gate),
+                static_cast<const __nv_bfloat16*>(act.mlp_gate),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        } else {
+            kernels::silu_f16(
+                static_cast<half*>(act.mlp_gate),
+                static_cast<const half*>(act.mlp_gate),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        }
 
-    if (session.runtime_config().check_correctness &&
-        session.runtime_config().dump_layer == layer_idx) {
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                   "layer_" + std::to_string(layer_idx) + "_mlp_gate_act",
                                   device_id, act.mlp_gate,
                                   seq_len, intermediate_size, compute_dtype);
         if (err) return err;
-    }
-    
-    // gate * up (element-wise)
-    if (compute_dtype == DType::BF16) {
-        kernels::elementwise_mul_bf16(
-            static_cast<__nv_bfloat16*>(act.mlp_gate),
-            static_cast<const __nv_bfloat16*>(act.mlp_gate),
-            static_cast<const __nv_bfloat16*>(act.mlp_up),
-            batch_size * seq_len * intermediate_size,
-            stream
-        );
-    } else {
-        kernels::elementwise_mul_f16(
-            static_cast<half*>(act.mlp_gate),
-            static_cast<const half*>(act.mlp_gate),
-            static_cast<const half*>(act.mlp_up),
-            batch_size * seq_len * intermediate_size,
-            stream
-        );
-    }
 
-    if (session.runtime_config().check_correctness &&
-        session.runtime_config().dump_layer == layer_idx) {
-        Error err = dump_last_row(session.runtime_config().dump_dir,
-                                  "layer_" + std::to_string(layer_idx) + "_mlp_mul",
-                                  device_id, act.mlp_gate,
-                                  seq_len, intermediate_size, compute_dtype);
+        if (compute_dtype == DType::BF16) {
+            kernels::elementwise_mul_bf16(
+                static_cast<__nv_bfloat16*>(act.mlp_gate),
+                static_cast<const __nv_bfloat16*>(act.mlp_gate),
+                static_cast<const __nv_bfloat16*>(act.mlp_up),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        } else {
+            kernels::elementwise_mul_f16(
+                static_cast<half*>(act.mlp_gate),
+                static_cast<const half*>(act.mlp_gate),
+                static_cast<const half*>(act.mlp_up),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        }
+
+        err = dump_last_row(session.runtime_config().dump_dir,
+                            "layer_" + std::to_string(layer_idx) + "_mlp_mul",
+                            device_id, act.mlp_gate,
+                            seq_len, intermediate_size, compute_dtype);
         if (err) return err;
+    } else {
+        // Fast path: fuse SiLU + mul (SwiGLU) to cut one launch and one global write+read.
+        if (compute_dtype == DType::BF16) {
+            kernels::silu_mul_fused_bf16(
+                static_cast<__nv_bfloat16*>(act.mlp_gate),
+                static_cast<const __nv_bfloat16*>(act.mlp_up),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        } else {
+            kernels::silu_mul_fused_f16(
+                static_cast<half*>(act.mlp_gate),
+                static_cast<const half*>(act.mlp_up),
+                batch_size * seq_len * intermediate_size,
+                stream
+            );
+        }
     }
     
     // Down projection: [M, intermediate] @ [hidden, intermediate]^T = [M, hidden]
@@ -2974,9 +2970,12 @@ Error CudaRuntime::decode_batch(const std::vector<int>& last_tokens,
     cuda_sync(lm_device);
 
     logits_flat.resize(static_cast<size_t>(batch_size) * static_cast<size_t>(config_.vocab_size));
+    auto d2h_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpy(logits_flat.data(), activations_[lm_device].logits,
                           logits_flat.size() * sizeof(float),
                           cudaMemcpyDeviceToHost));
+    auto d2h_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_d2h_ms_(std::chrono::duration<double, std::milli>(d2h_end - d2h_start).count());
     return Error::success();
 }
 
@@ -3005,11 +3004,14 @@ Error CudaRuntime::decode_batch_greedy(const std::vector<int>& last_tokens,
     );
 
     next_tokens.resize(static_cast<size_t>(batch_size));
+    auto d2h_start = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpyAsync(next_tokens.data(), next_tokens_dev_,
                                static_cast<size_t>(batch_size) * sizeof(int),
                                cudaMemcpyDeviceToHost,
                                streams_[lm_device]));
     CUDA_CHECK(cudaStreamSynchronize(streams_[lm_device]));
+    auto d2h_end = std::chrono::high_resolution_clock::now();
+    add_stage_profile_d2h_ms_(std::chrono::duration<double, std::milli>(d2h_end - d2h_start).count());
     return Error::success();
 }
 

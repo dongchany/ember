@@ -1,7 +1,8 @@
 # Benchmarks 操作手册
 
-这份文档覆盖以下 5 个 benchmark：
+这份文档覆盖以下 6 个 benchmark：
 
+- `benchmarks/kernel_bench.cu` → `build/ember_kernel_bench`
 - `benchmarks/p2p_bandwidth.cpp` → `build/ember_p2p_bandwidth`
 - `benchmarks/phase_analysis.cpp` → `build/ember_phase_analysis`
 - `benchmarks/e2e_benchmark.cpp` → `build/ember_benchmark`
@@ -31,6 +32,25 @@ cmake --build build -j
 
 - 存在 `config.json`
 - 同目录下存在 `*.safetensors`
+
+## 0) `ember_kernel_bench`（Kernel Microbenchmark / Roofline 输入）
+
+用途：对 **CUDA kernels** 做 microbenchmark，输出每个测试的：
+
+- `elapsed_us`：单次 kernel 的中位数耗时（默认 warmup=10，iters=100）
+- `bytes_moved`：按理论 IO 口径估算的搬运字节数（用于带宽/roofline 估算）
+- `effective_gbps`：`bytes_moved / elapsed`
+- `efficiency_pct`：相对 `--hw-bw`（默认 912 GB/s）的带宽利用率
+
+常用命令：
+
+```bash
+./build/ember_kernel_bench --dtype f16
+./build/ember_kernel_bench --dtype bf16
+./build/ember_kernel_bench --dtype f16 --csv /tmp/kernel_bench.csv
+```
+
+注意：embedding microbench 会做大显存分配，默认关闭；需要时加 `--include-embedding`。
 
 ## 1) `ember_p2p_bandwidth`（跨 GPU 传输带宽/延迟）
 
@@ -144,6 +164,8 @@ cmake --build build -j
 - `attention`
 - `ffn`
 - `p2p`（跨 GPU 传输/同步开销）
+- `memcpy_h2d` / `memcpy_d2h`（Host<->Device 拷贝）
+- `sampling`（仅在 `--decode-with-sampling` 时统计）
 - `lm_head`
 
 适合回答“时间到底花在了哪里？”以及“overlap 是否真的把 p2p 藏起来了？”。
@@ -160,6 +182,12 @@ cmake --build build -j
 ./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --csv /tmp/stage.csv
 ```
 
+包含 sampling（更接近真实 rollout 路径）：
+
+```bash
+./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --decode-with-sampling --csv /tmp/stage_rollout.csv
+```
+
 ### 输出（CSV）
 
 两行（或三行）输出：
@@ -169,7 +197,7 @@ cmake --build build -j
 
 表头：
 
-`phase,mode,gpus,split,prompt_len,decode_steps,chunk_len,overlap,wall_ms,embedding_ms,rmsnorm_ms,attention_ms,ffn_ms,p2p_ms,lm_head_ms,profile_total_ms`
+`phase,mode,gpus,split,prompt_len,decode_steps,chunk_len,overlap,decode_sampling,wall_ms,embedding_ms,rmsnorm_ms,attention_ms,ffn_ms,p2p_ms,memcpy_h2d_ms,memcpy_d2h_ms,sampling_ms,lm_head_ms,profile_total_ms`
 
 ## 5) `ember_serve_benchmark`（连续 batching 服务形态模拟）
 
@@ -208,4 +236,3 @@ python3 scripts/report/run_report.py --hub-root ~/huggingface/hub --gpus 0,1 --m
 ```
 
 它会自动调用上述 benchmarks（并额外做一些 A/B/C/D 阶段实验组合），输出到 `reports/<timestamp>/`。
-
