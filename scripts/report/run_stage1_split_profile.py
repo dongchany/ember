@@ -193,11 +193,11 @@ def detect_error_hint(text: str) -> str:
     return "runtime_error"
 
 
-def run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> Tuple[int, str, str]:
+def run_cmd(cmd: List[str], cwd: Path, log_path: Path, env: Optional[Dict[str, str]] = None) -> Tuple[int, str, str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("w", encoding="utf-8") as f:
         f.write("$ " + " ".join(cmd) + "\n\n")
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
+        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, env=env)
         f.write(p.stdout)
         if p.stderr:
             f.write("\n[stderr]\n")
@@ -385,6 +385,144 @@ def write_markdown(path: Path, model_dir: Path, summary_rows: List[Dict[str, str
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def extract_json_array_from_mixed_output(text: str) -> List[Dict[str, object]]:
+    lb = text.find("[")
+    rb = text.rfind("]")
+    if lb < 0 or rb < 0 or rb <= lb:
+        raise ValueError("failed to locate JSON payload in llama-bench output")
+    payload = text[lb:rb + 1]
+    data = json.loads(payload)
+    if not isinstance(data, list):
+        raise ValueError("unexpected llama-bench JSON: non-list payload")
+    return data
+
+
+def run_llama_bench_once(
+    repo: Path,
+    llama_bin_dir: Path,
+    gguf_path: Path,
+    prompt_len: int,
+    decode_steps: int,
+    device: str,
+    split_mode: str,
+    tensor_split: str,
+    log_path: Path,
+) -> Dict[str, float]:
+    llama_bench = llama_bin_dir / "llama-bench"
+    if not llama_bench.exists():
+        raise FileNotFoundError(f"missing llama-bench: {llama_bench}")
+    if not gguf_path.exists():
+        raise FileNotFoundError(f"missing gguf: {gguf_path}")
+
+    cmd = [
+        str(llama_bench),
+        "-m", str(gguf_path),
+        "-p", str(prompt_len),
+        "-n", str(decode_steps),
+        "-r", "1",
+        "-ngl", "999",
+        "-o", "json",
+        "-dev", device,
+        "-sm", split_mode,
+    ]
+    if tensor_split.strip():
+        cmd += ["-ts", tensor_split]
+
+    env = os.environ.copy()
+    ld = env.get("LD_LIBRARY_PATH", "")
+    prefix = str(llama_bin_dir)
+    env["LD_LIBRARY_PATH"] = f"{prefix}:{ld}" if ld else prefix
+
+    rc, out, err = run_cmd(cmd, cwd=repo, log_path=log_path, env=env)
+    if rc != 0:
+        raise RuntimeError(f"llama-bench failed rc={rc}; see {log_path}")
+
+    arr = extract_json_array_from_mixed_output((out or "") + "\n" + (err or ""))
+    pre = None
+    dec = None
+    for item in arr:
+        n_prompt = int(item.get("n_prompt", 0))
+        n_gen = int(item.get("n_gen", 0))
+        if n_prompt > 0 and n_gen == 0:
+            pre = item
+        if n_prompt == 0 and n_gen > 0:
+            dec = item
+    if pre is None or dec is None:
+        raise RuntimeError(f"llama-bench output missing prompt/gen entries; see {log_path}")
+
+    prefill_ms = float(pre.get("avg_ns", 0.0)) / 1e6
+    decode_total_ms = float(dec.get("avg_ns", 0.0)) / 1e6
+    decode_tok_s = float(dec.get("avg_ts", 0.0))
+    decode_per_tok_ms = (decode_total_ms / float(decode_steps)) if decode_steps > 0 else 0.0
+    total_ms = prefill_ms + decode_total_ms
+    rollout_tok_s = (float(decode_steps) * 1000.0 / total_ms) if total_ms > 0.0 else 0.0
+    return {
+        "prefill_ms": prefill_ms,
+        "decode_total_ms": decode_total_ms,
+        "decode_tok_s": decode_tok_s,
+        "decode_per_token_ms": decode_per_tok_ms,
+        "rollout_total_ms": total_ms,
+        "rollout_tok_s": rollout_tok_s,
+    }
+
+
+def write_vs_llama_outputs(
+    out_dir: Path,
+    ember_best: Dict[str, str],
+    llama_rows: List[Dict[str, str]],
+    gguf_path: Path,
+    split_mode: str,
+    tensor_split: str,
+) -> None:
+    out_rows: List[Dict[str, str]] = []
+    out_rows.append(
+        {
+            "engine": "ember",
+            "config": f"split={ember_best.get('split','')} mode={ember_best.get('mode','')}",
+            "prefill_ms": f"{safe_float(ember_best.get('prefill_wall_ms', '0')):.3f}",
+            "decode_tok_s": f"{(1000.0 / safe_float(ember_best.get('decode_per_token_ms', '0'))) if safe_float(ember_best.get('decode_per_token_ms', '0')) > 0 else 0.0:.3f}",
+            "decode_per_token_ms": f"{safe_float(ember_best.get('decode_per_token_ms', '0')):.3f}",
+            "rollout_total_ms": f"{safe_float(ember_best.get('rollout_total_ms_est', '0')):.3f}",
+            "rollout_tok_s": f"{safe_float(ember_best.get('rollout_tok_s_est', '0')):.3f}",
+            "notes": "best split from stage12 sweep",
+        }
+    )
+    out_rows.extend(llama_rows)
+
+    out_csv = out_dir / "stage12_vs_llama.csv"
+    write_csv(out_csv, out_rows)
+
+    md_lines: List[str] = []
+    md_lines.append("# Stage 1.2 Ember vs llama.cpp")
+    md_lines.append("")
+    md_lines.append(f"- GGUF: `{gguf_path}`")
+    md_lines.append(f"- llama split_mode: `{split_mode}`")
+    md_lines.append(f"- llama tensor_split: `{tensor_split if tensor_split.strip() else 'auto/none'}`")
+    md_lines.append("")
+    md_lines.append("| engine | config | prefill_ms | decode_tok_s | decode_per_token_ms | rollout_total_ms | rollout_tok_s | notes |")
+    md_lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+    for r in out_rows:
+        md_lines.append(
+            "| "
+            + " | ".join(
+                [
+                    r["engine"],
+                    r["config"],
+                    r["prefill_ms"],
+                    r["decode_tok_s"],
+                    r["decode_per_token_ms"],
+                    r["rollout_total_ms"],
+                    r["rollout_tok_s"],
+                    r["notes"],
+                ]
+            )
+            + " |"
+        )
+    md_lines.append("")
+    md_lines.append("- Note: llama-bench and ember_stage_breakdown are different harnesses; compare as practical baseline, not strict apples-to-apples kernel microbenchmark.")
+    (out_dir / "stage12_vs_llama.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run Stage 1.2 split sweep profiling in one command.")
     ap.add_argument("--model", type=str, default=os.environ.get("MODEL_PATH", ""), help="model path or HF model id")
@@ -407,6 +545,13 @@ def main() -> None:
     ap.add_argument("--stop-on-error", dest="continue_on_error", action="store_false")
     ap.add_argument("--skip-existing", action="store_true", default=True)
     ap.add_argument("--no-skip-existing", dest="skip_existing", action="store_false")
+    ap.add_argument("--include-llama", action="store_true", help="also run llama-bench baseline and output stage12_vs_llama.csv/md")
+    ap.add_argument("--llama-bin-dir", type=str, default="", help="path to llama.cpp build/bin (must contain llama-bench)")
+    ap.add_argument("--llama-gguf", type=str, default="", help="path to GGUF model for llama-bench")
+    ap.add_argument("--llama-single-device", type=str, default="CUDA0")
+    ap.add_argument("--llama-dual-device", type=str, default="CUDA0/CUDA1")
+    ap.add_argument("--llama-dual-split-mode", type=str, default="layer", choices=["none", "layer", "row"])
+    ap.add_argument("--llama-dual-tensor-split", type=str, default="", help="optional tensor split ratios, e.g. 0.5/0.5")
     ap.add_argument("--build-dir", type=str, default="build")
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
@@ -585,6 +730,104 @@ def main() -> None:
         ],
     )
 
+    if args.include_llama:
+        if not args.llama_bin_dir.strip():
+            die("--llama-bin-dir is required with --include-llama")
+        if not args.llama_gguf.strip():
+            die("--llama-gguf is required with --include-llama")
+        if not summary_rows:
+            die("cannot compare against llama: stage12 summary has no usable rows")
+
+        llama_bin_dir = Path(args.llama_bin_dir).expanduser().resolve()
+        gguf_path = Path(args.llama_gguf).expanduser().resolve()
+        ember_best = max(summary_rows, key=lambda r: safe_float(r.get("rollout_tok_s_est", "0")))
+
+        llama_rows: List[Dict[str, str]] = []
+        try:
+            single = run_llama_bench_once(
+                repo=repo,
+                llama_bin_dir=llama_bin_dir,
+                gguf_path=gguf_path,
+                prompt_len=args.prompt_len,
+                decode_steps=args.decode_steps,
+                device=args.llama_single_device,
+                split_mode="layer",
+                tensor_split="",
+                log_path=logs_dir / "llama_single.log",
+            )
+            llama_rows.append(
+                {
+                    "engine": "llama.cpp",
+                    "config": f"{args.llama_single_device} single",
+                    "prefill_ms": f"{single['prefill_ms']:.3f}",
+                    "decode_tok_s": f"{single['decode_tok_s']:.3f}",
+                    "decode_per_token_ms": f"{single['decode_per_token_ms']:.3f}",
+                    "rollout_total_ms": f"{single['rollout_total_ms']:.3f}",
+                    "rollout_tok_s": f"{single['rollout_tok_s']:.3f}",
+                    "notes": "llama-bench",
+                }
+            )
+        except Exception as ex:
+            llama_rows.append(
+                {
+                    "engine": "llama.cpp",
+                    "config": f"{args.llama_single_device} single",
+                    "prefill_ms": "",
+                    "decode_tok_s": "",
+                    "decode_per_token_ms": "",
+                    "rollout_total_ms": "",
+                    "rollout_tok_s": "",
+                    "notes": f"failed: {ex}",
+                }
+            )
+
+        try:
+            dual = run_llama_bench_once(
+                repo=repo,
+                llama_bin_dir=llama_bin_dir,
+                gguf_path=gguf_path,
+                prompt_len=args.prompt_len,
+                decode_steps=args.decode_steps,
+                device=args.llama_dual_device,
+                split_mode=args.llama_dual_split_mode,
+                tensor_split=args.llama_dual_tensor_split,
+                log_path=logs_dir / "llama_dual.log",
+            )
+            llama_rows.append(
+                {
+                    "engine": "llama.cpp",
+                    "config": f"{args.llama_dual_device} dual",
+                    "prefill_ms": f"{dual['prefill_ms']:.3f}",
+                    "decode_tok_s": f"{dual['decode_tok_s']:.3f}",
+                    "decode_per_token_ms": f"{dual['decode_per_token_ms']:.3f}",
+                    "rollout_total_ms": f"{dual['rollout_total_ms']:.3f}",
+                    "rollout_tok_s": f"{dual['rollout_tok_s']:.3f}",
+                    "notes": f"llama-bench split_mode={args.llama_dual_split_mode}",
+                }
+            )
+        except Exception as ex:
+            llama_rows.append(
+                {
+                    "engine": "llama.cpp",
+                    "config": f"{args.llama_dual_device} dual",
+                    "prefill_ms": "",
+                    "decode_tok_s": "",
+                    "decode_per_token_ms": "",
+                    "rollout_total_ms": "",
+                    "rollout_tok_s": "",
+                    "notes": f"failed: {ex}",
+                }
+            )
+
+        write_vs_llama_outputs(
+            out_dir=out_dir,
+            ember_best=ember_best,
+            llama_rows=llama_rows,
+            gguf_path=gguf_path,
+            split_mode=args.llama_dual_split_mode,
+            tensor_split=args.llama_dual_tensor_split,
+        )
+
     print("")
     print("[done] stage1.2 split profiling completed")
     print(f"- raw rows: {raw_csv}")
@@ -592,6 +835,9 @@ def main() -> None:
     print(f"- transfer vs compute: {transfer_csv}")
     print(f"- bubble vs split: {bubble_csv}")
     print(f"- summary md: {summary_md}")
+    if args.include_llama:
+        print(f"- vs llama csv: {out_dir / 'stage12_vs_llama.csv'}")
+        print(f"- vs llama md: {out_dir / 'stage12_vs_llama.md'}")
     if failed_rows:
         print(f"- failures: {failures_csv} ({len(failed_rows)} failed runs)")
     else:

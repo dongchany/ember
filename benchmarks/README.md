@@ -296,6 +296,17 @@ HF_HOME=~/huggingface scripts/report/run_stage1_split_profile.sh --model Qwen/Qw
 - 默认开启 OOM 自动重试（`chunk_len` 逐步减半）
 - 默认开启 CUDA runtime unavailable 短暂重试（2 次）
 
+可选：附带 `llama.cpp` 对照（需要本地 `llama-bench` + GGUF）：
+
+```bash
+scripts/report/run_stage1_split_profile.sh \
+  --model /path/to/hf_model \
+  --gpus 0,1 \
+  --include-llama \
+  --llama-bin-dir /path/to/llama.cpp/build/bin \
+  --llama-gguf /path/to/model.gguf
+```
+
 产物位于 `reports/stage1_split_profile_<timestamp>/`，包含：
 
 - `stage12_raw_rows.csv`（按 split 的原始 stage 行）
@@ -303,5 +314,7 @@ HF_HOME=~/huggingface scripts/report/run_stage1_split_profile.sh --model Qwen/Qw
 - `stage12_transfer_vs_compute.csv`（p2p/memcpy 与 compute 对比）
 - `stage12_bubble_vs_split.csv`（overlap 对 no_overlap 的 bubble 隐藏估计）
 - `stage12_summary.md`（可直接贴到 P2 草稿）
+- `stage12_vs_llama.csv`（可选，Ember vs llama.cpp 对照）
+- `stage12_vs_llama.md`（可选，对照摘要）
 - `stage12_failures.csv`（失败组合与日志定位）
 - `logs/`（每次运行日志）

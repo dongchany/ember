@@ -44,3 +44,4 @@ build__pycache__/
 __pycache__/
 build/
 reports/*
+ember_project_context.txt

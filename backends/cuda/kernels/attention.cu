@@ -211,29 +211,22 @@ void attention_f16(
                 // Workspace 位置
                 float* scores = attn_workspace + (b * num_heads + qh) * seq_q * seq_k;
                 half* probs = attn_probs + (b * num_heads + qh) * seq_q * seq_k;
-                
-                // 方法：对每个 query token 单独处理
-                for (int sq = 0; sq < seq_q; ++sq) {
-                    const half* q_vec = q + ((b * seq_q + sq) * num_heads + qh) * head_dim;
-                    float* score_row = scores + sq * seq_k;
-                    
-                    // scores = scale * Q @ K^T
-                    // K is [seq_k, head_dim] (前 seq_k 行), K^T is [head_dim, seq_k]
-                    // Q is [1, head_dim]
-                    // Result is [1, seq_k]
-                    cublasGemmEx(
-                        cublas,
-                        CUBLAS_OP_T, CUBLAS_OP_N,  // K^T, Q
-                        seq_k, 1, head_dim,        // m, n, k
-                        &alpha_f,
-                        k_ptr, CUDA_R_16F, head_dim,   // K: [max_seq, head_dim], 但我们只用前 seq_k 行
-                        q_vec, CUDA_R_16F, head_dim,   // Q: [1, head_dim]
-                        &beta_zero,
-                        score_row, CUDA_R_32F, seq_k,  // scores: [1, seq_k] (FP32)
-                        CUBLAS_COMPUTE_32F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-                    );
-                }
+
+                // Batched over seq_q:
+                // scores: [seq_q, seq_k] row-major in memory (written as column-major [seq_k, seq_q]).
+                const half* q_mat = q + (b * seq_q * num_heads + qh) * head_dim;
+                cublasGemmEx(
+                    cublas,
+                    CUBLAS_OP_T, CUBLAS_OP_N,  // K^T, Q
+                    seq_k, seq_q, head_dim,    // m, n, k
+                    &alpha_f,
+                    k_ptr, CUDA_R_16F, head_dim,
+                    q_mat, CUDA_R_16F, num_heads * head_dim,
+                    &beta_zero,
+                    scores, CUDA_R_32F, seq_k,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
                 
                 // Causal mask (prefill only, safe for decode)
                 if (seq_q > 1 || start_pos > 0) {
@@ -246,29 +239,21 @@ void attention_f16(
                 // Softmax (in-place on scores)
                 softmax_f32(scores, scores, 1, 1, seq_q, seq_k, 1.0f, stream);
                 convert_f32_to_f16(probs, scores, static_cast<int64_t>(seq_q) * seq_k, stream);
-                
-                // Output = softmax(scores) @ V
-                for (int sq = 0; sq < seq_q; ++sq) {
-                    half* score_row = probs + sq * seq_k;
-                    half* out_vec = output + ((b * seq_q + sq) * num_heads + qh) * head_dim;
-                    
-                    // out = scores @ V
-                    // scores: [1, seq_k]
-                    // V: [seq_k, head_dim]
-                    // Result: [1, head_dim]
-                    cublasGemmEx(
-                        cublas,
-                        CUBLAS_OP_N, CUBLAS_OP_N,
-                        head_dim, 1, seq_k,
-                        &alpha_one,
-                        v_ptr, CUDA_R_16F, head_dim,    // V: [max_seq, head_dim], 只用前 seq_k 行
-                        score_row, CUDA_R_16F, seq_k,
-                        &beta_zero,
-                        out_vec, CUDA_R_16F, head_dim,
-                        CUBLAS_COMPUTE_32F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-                    );
-                }
+
+                // Output = probs @ V, packed by token stride (num_heads * head_dim).
+                half* out_mat = output + (b * seq_q * num_heads + qh) * head_dim;
+                cublasGemmEx(
+                    cublas,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    head_dim, seq_q, seq_k,
+                    &alpha_one,
+                    v_ptr, CUDA_R_16F, head_dim,
+                    probs, CUDA_R_16F, seq_k,
+                    &beta_zero,
+                    out_mat, CUDA_R_16F, num_heads * head_dim,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
             }
         }
     }
@@ -312,24 +297,20 @@ void attention_bf16(
             for (int qh = q_head_start; qh < q_head_end; ++qh) {
                 float* scores = attn_workspace + (b * num_heads + qh) * seq_q * seq_k;
                 __nv_bfloat16* probs = attn_probs + (b * num_heads + qh) * seq_q * seq_k;
-                
-                for (int sq = 0; sq < seq_q; ++sq) {
-                    const __nv_bfloat16* q_vec = q + ((b * seq_q + sq) * num_heads + qh) * head_dim;
-                    float* score_row = scores + sq * seq_k;
-                    
-                    cublasGemmEx(
-                        cublas,
-                        CUBLAS_OP_T, CUBLAS_OP_N,
-                        seq_k, 1, head_dim,
-                        &alpha_f,
-                        k_ptr, CUDA_R_16BF, head_dim,
-                        q_vec, CUDA_R_16BF, head_dim,
-                        &beta_zero,
-                        score_row, CUDA_R_32F, seq_k,
-                        CUBLAS_COMPUTE_32F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-                    );
-                }
+
+                const __nv_bfloat16* q_mat = q + (b * seq_q * num_heads + qh) * head_dim;
+                cublasGemmEx(
+                    cublas,
+                    CUBLAS_OP_T, CUBLAS_OP_N,
+                    seq_k, seq_q, head_dim,
+                    &alpha_f,
+                    k_ptr, CUDA_R_16BF, head_dim,
+                    q_mat, CUDA_R_16BF, num_heads * head_dim,
+                    &beta_zero,
+                    scores, CUDA_R_32F, seq_k,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
                 
                 if (seq_q > 1 || start_pos > 0) {
                     int total = seq_q * seq_k;
@@ -340,24 +321,20 @@ void attention_bf16(
                 
                 softmax_f32(scores, scores, 1, 1, seq_q, seq_k, 1.0f, stream);
                 convert_f32_to_bf16(probs, scores, static_cast<int64_t>(seq_q) * seq_k, stream);
-                
-                for (int sq = 0; sq < seq_q; ++sq) {
-                    __nv_bfloat16* score_row = probs + sq * seq_k;
-                    __nv_bfloat16* out_vec = output + ((b * seq_q + sq) * num_heads + qh) * head_dim;
-                    
-                    cublasGemmEx(
-                        cublas,
-                        CUBLAS_OP_N, CUBLAS_OP_N,
-                        head_dim, 1, seq_k,
-                        &alpha_one,
-                        v_ptr, CUDA_R_16BF, head_dim,
-                        score_row, CUDA_R_16BF, seq_k,
-                        &beta_zero,
-                        out_vec, CUDA_R_16BF, head_dim,
-                        CUBLAS_COMPUTE_32F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-                    );
-                }
+
+                __nv_bfloat16* out_mat = output + (b * seq_q * num_heads + qh) * head_dim;
+                cublasGemmEx(
+                    cublas,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    head_dim, seq_q, seq_k,
+                    &alpha_one,
+                    v_ptr, CUDA_R_16BF, head_dim,
+                    probs, CUDA_R_16BF, seq_k,
+                    &beta_zero,
+                    out_mat, CUDA_R_16BF, num_heads * head_dim,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
             }
         }
     }
