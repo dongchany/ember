@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
     }
 
     auto runtime = ember::RuntimeFactory::create_cuda();
-    if (!runtime || !runtime->available()) die("CUDA runtime not available");
+    if (!runtime) die("failed to create CUDA runtime");
     auto* cuda_rt = dynamic_cast<ember::cuda::CudaRuntime*>(runtime.get());
     if (!cuda_rt) die("expected CUDA runtime");
 
