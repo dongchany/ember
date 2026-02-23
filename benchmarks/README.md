@@ -236,3 +236,72 @@ python3 scripts/report/run_report.py --hub-root ~/huggingface/hub --gpus 0,1 --m
 ```
 
 它会自动调用上述 benchmarks（并额外做一些 A/B/C/D 阶段实验组合），输出到 `reports/<timestamp>/`。
+
+## 阶段 1.1 里程碑（一键跑完整矩阵）
+
+如果你要一次性完成“阶段 1.1（prefill/decode/sampling/memcpy 时间分解）”并生成汇总表，可直接运行：
+
+```bash
+scripts/report/run_stage1_milestone.sh --model /path/to/model --gpus 0,1
+```
+
+也支持直接传 HuggingFace 模型名（仅从本地缓存解析，不会下载）：
+
+```bash
+HF_HOME=~/huggingface scripts/report/run_stage1_milestone.sh --model Qwen/Qwen3-8B --gpus 0,1
+```
+
+默认会跑：
+
+- `prompt_lens = 512,1024,2048,4096`
+- `decode_steps = 64,128,256`
+- 2 卡会自动同时跑 `overlap=0/1`
+- 2 卡默认强制开启 `--pipeline`，`overlap=0` 表示“分块但不重叠”
+- 默认开启 `--decode-with-sampling`
+- 默认开启 OOM 自动重试（`chunk_len` 逐步减半到 `--min-chunk-len`，默认 64）
+- 默认会对 `CUDA runtime not available` 做短暂重试（`--retry-runtime-unavailable`，默认 2 次）
+- 默认开启 `--continue-on-error`，单点失败不会中断整阶段
+
+产物位于 `reports/stage1_milestone_<timestamp>/`，包含：
+
+- `stage1_raw_rows.csv`（原始行）
+- `stage1_summary.csv`（汇总指标）
+- `stage1_summary.md`（可直接贴论文草稿）
+- `stage1_mainline_ready.csv`（主线可直接消费的数据表）
+- `stage1_mainline_ready.md`（缺失组合与主线就绪说明）
+- `p1_fig2_prefill_share.csv`（论文图表预填充分解数据）
+- `p2_stage_latency_components.csv`（分 stage 组件耗时）
+- `stage1_failures.csv`（失败组合和日志定位）
+- `logs/`（每次运行日志）
+
+## 阶段 1.2：Pipeline split sweep（吞吐 / 传输占比 / bubble）
+
+如果你要完成“阶段 1.2（不同 layer split 的 2-GPU pipeline profiling）”，可直接运行：
+
+```bash
+scripts/report/run_stage1_split_profile.sh --model /path/to/model --gpus 0,1
+```
+
+也支持传 HF 模型名（仅从本地缓存解析，不会下载）：
+
+```bash
+HF_HOME=~/huggingface scripts/report/run_stage1_split_profile.sh --model Qwen/Qwen3-8B --gpus 0,1
+```
+
+默认行为：
+
+- 自动 sweep 多个 split（25%/33%/50%/67%/75%）
+- 每个 split 跑 `overlap=0/1`
+- 2 卡默认强制 `--pipeline`
+- 默认开启 OOM 自动重试（`chunk_len` 逐步减半）
+- 默认开启 CUDA runtime unavailable 短暂重试（2 次）
+
+产物位于 `reports/stage1_split_profile_<timestamp>/`，包含：
+
+- `stage12_raw_rows.csv`（按 split 的原始 stage 行）
+- `stage12_split_summary.csv`（吞吐和 prefill/decode 分解）
+- `stage12_transfer_vs_compute.csv`（p2p/memcpy 与 compute 对比）
+- `stage12_bubble_vs_split.csv`（overlap 对 no_overlap 的 bubble 隐藏估计）
+- `stage12_summary.md`（可直接贴到 P2 草稿）
+- `stage12_failures.csv`（失败组合与日志定位）
+- `logs/`（每次运行日志）
