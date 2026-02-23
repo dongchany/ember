@@ -192,6 +192,60 @@ void attention_f16(
     const float alpha_f = scale;
     const float beta_zero = 0.0f;
     const float alpha_one = 1.0f;
+
+    // Decode fast path: seq_q=1, batch GEMMs across heads-per-kv to cut launch overhead.
+    if (seq_q == 1) {
+        for (int b = 0; b < batch_size; ++b) {
+            for (int kv_head = 0; kv_head < num_kv_heads; ++kv_head) {
+                const int q_head_start = kv_head * heads_per_kv;
+                const int group_heads = heads_per_kv;
+
+                const half* k_ptr = k_cache + (b * num_kv_heads + kv_head) * max_seq * head_dim;
+                const half* v_ptr = v_cache + (b * num_kv_heads + kv_head) * max_seq * head_dim;
+                const half* q_group = q + (b * num_heads + q_head_start) * head_dim;
+                float* scores_group = attn_workspace + (b * num_heads + q_head_start) * seq_k;
+                half* probs_group = attn_probs + (b * num_heads + q_head_start) * seq_k;
+                half* out_group = output + (b * num_heads + q_head_start) * head_dim;
+
+                cublasGemmStridedBatchedEx(
+                    cublas,
+                    CUBLAS_OP_T, CUBLAS_OP_N,
+                    seq_k, 1, head_dim,
+                    &alpha_f,
+                    k_ptr, CUDA_R_16F, head_dim, 0,
+                    q_group, CUDA_R_16F, head_dim, head_dim,
+                    &beta_zero,
+                    scores_group, CUDA_R_32F, seq_k, seq_k,
+                    group_heads,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
+
+                softmax_f32(scores_group, scores_group, 1, group_heads, 1, seq_k, 1.0f, stream);
+                convert_f32_to_f16(
+                    probs_group,
+                    scores_group,
+                    static_cast<int64_t>(group_heads) * seq_k,
+                    stream
+                );
+
+                cublasGemmStridedBatchedEx(
+                    cublas,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    head_dim, 1, seq_k,
+                    &alpha_one,
+                    v_ptr, CUDA_R_16F, head_dim, 0,
+                    probs_group, CUDA_R_16F, seq_k, seq_k,
+                    &beta_zero,
+                    out_group, CUDA_R_16F, head_dim, head_dim,
+                    group_heads,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
+            }
+        }
+        return;
+    }
     
     // 对每个 batch 和 KV head group 处理
     for (int b = 0; b < batch_size; ++b) {
@@ -229,7 +283,7 @@ void attention_f16(
                 );
                 
                 // Causal mask (prefill only, safe for decode)
-                if (seq_q > 1 || start_pos > 0) {
+                if (seq_q > 1) {
                     int total = seq_q * seq_k;
                     int block = 256;
                     int grid = (total + block - 1) / block;
@@ -285,6 +339,59 @@ void attention_bf16(
     const float alpha_f = scale;
     const float beta_zero = 0.0f;
     const float alpha_one = 1.0f;
+
+    if (seq_q == 1) {
+        for (int b = 0; b < batch_size; ++b) {
+            for (int kv_head = 0; kv_head < num_kv_heads; ++kv_head) {
+                const int q_head_start = kv_head * heads_per_kv;
+                const int group_heads = heads_per_kv;
+
+                const __nv_bfloat16* k_ptr = k_cache + (b * num_kv_heads + kv_head) * max_seq * head_dim;
+                const __nv_bfloat16* v_ptr = v_cache + (b * num_kv_heads + kv_head) * max_seq * head_dim;
+                const __nv_bfloat16* q_group = q + (b * num_heads + q_head_start) * head_dim;
+                float* scores_group = attn_workspace + (b * num_heads + q_head_start) * seq_k;
+                __nv_bfloat16* probs_group = attn_probs + (b * num_heads + q_head_start) * seq_k;
+                __nv_bfloat16* out_group = output + (b * num_heads + q_head_start) * head_dim;
+
+                cublasGemmStridedBatchedEx(
+                    cublas,
+                    CUBLAS_OP_T, CUBLAS_OP_N,
+                    seq_k, 1, head_dim,
+                    &alpha_f,
+                    k_ptr, CUDA_R_16BF, head_dim, 0,
+                    q_group, CUDA_R_16BF, head_dim, head_dim,
+                    &beta_zero,
+                    scores_group, CUDA_R_32F, seq_k, seq_k,
+                    group_heads,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
+
+                softmax_f32(scores_group, scores_group, 1, group_heads, 1, seq_k, 1.0f, stream);
+                convert_f32_to_bf16(
+                    probs_group,
+                    scores_group,
+                    static_cast<int64_t>(group_heads) * seq_k,
+                    stream
+                );
+
+                cublasGemmStridedBatchedEx(
+                    cublas,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    head_dim, 1, seq_k,
+                    &alpha_one,
+                    v_ptr, CUDA_R_16BF, head_dim, 0,
+                    probs_group, CUDA_R_16BF, seq_k, seq_k,
+                    &beta_zero,
+                    out_group, CUDA_R_16BF, head_dim, head_dim,
+                    group_heads,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP
+                );
+            }
+        }
+        return;
+    }
     
     for (int b = 0; b < batch_size; ++b) {
         for (int kv_head = 0; kv_head < num_kv_heads; ++kv_head) {
@@ -312,7 +419,7 @@ void attention_bf16(
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP
                 );
                 
-                if (seq_q > 1 || start_pos > 0) {
+                if (seq_q > 1) {
                     int total = seq_q * seq_k;
                     int block = 256;
                     int grid = (total + block - 1) / block;
