@@ -466,7 +466,7 @@ MemoryEstimate CudaRuntime::estimate_memory(const ModelConfig& config,
     size_t num_heads = config.num_heads;
     size_t head_dim = config.head_dim;
     
-    // hidden_states + residual + norm_out + QKV outputs + attn_out + MLP buffers
+    // hidden_states + norm_out + QKV outputs + attn_out + MLP buffers
     est.activation_bytes = batch_size * ctx_len * hidden_size * elem_size * 4;  // 主要 buffers
     est.activation_bytes += batch_size * ctx_len * (num_heads * head_dim * 3) * elem_size;  // QKV
     est.activation_bytes += batch_size * ctx_len * intermediate_size * elem_size * 2;  // MLP
@@ -762,7 +762,6 @@ Error CudaRuntime::allocate_activation_buffers(int max_seq_len, int batch_size, 
         // 主要激活缓冲区
         size_t hidden_size = batch_size * max_seq_len * h * elem_size;
         CUDA_CHECK(cudaMalloc(&act.hidden_states, hidden_size));
-        CUDA_CHECK(cudaMalloc(&act.residual, hidden_size));
         CUDA_CHECK(cudaMalloc(&act.norm_out, hidden_size));
         CUDA_CHECK(cudaMalloc(&act.last_hidden, batch_size * h * elem_size));
         
@@ -797,7 +796,6 @@ void CudaRuntime::free_activation_buffers() {
         if (act.allocated) {
             cudaSetDevice(act.device_id);
             cuda_free(act.hidden_states);
-            cuda_free(act.residual);
             cuda_free(act.norm_out);
             cuda_free(act.last_hidden);
             cuda_free(act.q_proj_out);

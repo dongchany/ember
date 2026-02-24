@@ -56,7 +56,6 @@ struct Qwen3Weights {
 // 中间激活值缓冲区
 struct ActivationBuffers {
     void* hidden_states = nullptr;     // [batch, seq, hidden_size]
-    void* residual = nullptr;          // [batch, seq, hidden_size]
     void* norm_out = nullptr;          // [batch, seq, hidden_size]
     void* last_hidden = nullptr;       // [batch, hidden_size] (packed last token per batch)
     void* q_proj_out = nullptr;        // [batch, seq, num_heads * head_dim]
