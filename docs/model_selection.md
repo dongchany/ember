@@ -85,3 +85,23 @@ scripts/report/run_stage1_milestone.sh \
   --model Qwen/Qwen3-1.7B \
   --gpus 0,1
 ```
+
+## Stage 1.2 Split Sweep (with Delta/P2 Output)
+
+```bash
+HF_HOME=/home/dong/xilinx/huggingface \
+scripts/report/run_stage1_split_profile.sh \
+  --model Qwen/Qwen3-4B-Instruct-2507 \
+  --gpus 0,1 \
+  --include-llama \
+  --llama-bin-dir /path/to/llama.cpp/build/bin \
+  --llama-gguf /path/to/model.gguf \
+  --baseline-summary /path/to/prev/stage12_split_summary.csv \
+  --anchor-summary /path/to/anchor/stage12_split_summary.csv \
+  --p2-note "one-line implementation note"
+```
+
+Outputs (in `reports/stage1_split_profile_<timestamp>/`):
+
+- `stage12_delta_vs_<baseline>.csv/md` (per-split old->new delta)
+- `stage12_p2_input.md` (best config + delta summary for stage1.2 doc input)

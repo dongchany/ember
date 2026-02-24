@@ -4,6 +4,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -523,6 +524,282 @@ def write_vs_llama_outputs(
     (out_dir / "stage12_vs_llama.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
 
+def infer_label_from_summary(path: Path) -> str:
+    name = path.parent.name.strip()
+    if name:
+        return name
+    stem = path.stem.strip()
+    return stem if stem else "baseline"
+
+
+def pretty_model_name(model_dir: Path) -> str:
+    if model_dir.parent.name == "snapshots":
+        cache_dir = model_dir.parent.parent.name
+        if cache_dir.startswith("models--"):
+            return cache_dir[len("models--"):].replace("--", "/")
+        if cache_dir:
+            return cache_dir
+    return model_dir.name
+
+
+def slugify_label(text: str) -> str:
+    raw = text.strip().lower()
+    if not raw:
+        return "baseline"
+    slug = re.sub(r"[^a-z0-9_-]+", "_", raw)
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    return slug if slug else "baseline"
+
+
+def pick_best_row(summary_rows: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    if not summary_rows:
+        return None
+    return max(summary_rows, key=lambda r: safe_float(r.get("rollout_tok_s_est", "0")))
+
+
+def summary_key(row: Dict[str, str]) -> Tuple[str, str]:
+    return row.get("split", ""), row.get("mode", "")
+
+
+def summary_to_map(rows: List[Dict[str, str]]) -> Dict[Tuple[str, str], Dict[str, str]]:
+    out: Dict[Tuple[str, str], Dict[str, str]] = {}
+    for r in rows:
+        out[summary_key(r)] = r
+    return out
+
+
+def pct_delta(old: float, new: float) -> Optional[float]:
+    if old == 0.0:
+        return None
+    return (new - old) / old * 100.0
+
+
+def fmt_pct(v: Optional[float]) -> str:
+    if v is None:
+        return "n/a"
+    return f"{v:+.2f}%"
+
+
+def resolve_existing_csv(path_arg: str, default_path: Optional[Path] = None) -> Optional[Path]:
+    if path_arg.strip():
+        p = Path(path_arg).expanduser().resolve()
+        if not p.exists():
+            die(f"csv not found: {p}")
+        return p
+    if default_path is not None and default_path.exists():
+        return default_path
+    return None
+
+
+def read_rollout_vs_llama(vs_path: Optional[Path]) -> Optional[Tuple[float, float, float]]:
+    if vs_path is None:
+        return None
+    rows = read_csv(vs_path)
+    ember_rollout = None
+    llama_dual_rollout = None
+    for r in rows:
+        engine = r.get("engine", "").strip().lower()
+        config = r.get("config", "").strip().lower()
+        rollout = safe_float(r.get("rollout_tok_s", "0"))
+        if rollout <= 0.0:
+            continue
+        if engine == "ember":
+            ember_rollout = rollout
+        if engine == "llama.cpp" and "dual" in config:
+            llama_dual_rollout = rollout
+    if ember_rollout is None or llama_dual_rollout is None or llama_dual_rollout <= 0.0:
+        return None
+    ratio = ember_rollout / llama_dual_rollout * 100.0
+    return ember_rollout, llama_dual_rollout, ratio
+
+
+def write_delta_outputs(
+    out_dir: Path,
+    current_summary: List[Dict[str, str]],
+    baseline_summary: List[Dict[str, str]],
+    baseline_label: str,
+    current_vs_llama_csv: Optional[Path],
+    baseline_vs_llama_csv: Optional[Path],
+) -> Tuple[Path, Path]:
+    cur_map = summary_to_map(current_summary)
+    base_map = summary_to_map(baseline_summary)
+    keys = sorted(set(cur_map.keys()) & set(base_map.keys()))
+
+    delta_rows: List[Dict[str, str]] = []
+    for key in keys:
+        old = base_map[key]
+        new = cur_map[key]
+        old_rollout = safe_float(old.get("rollout_tok_s_est", "0"))
+        new_rollout = safe_float(new.get("rollout_tok_s_est", "0"))
+        old_decode = safe_float(old.get("decode_per_token_ms", "0"))
+        new_decode = safe_float(new.get("decode_per_token_ms", "0"))
+        delta_rows.append(
+            {
+                "split": key[0],
+                "mode": key[1],
+                "rollout_tok_s_old": f"{old_rollout:.3f}",
+                "rollout_tok_s_new": f"{new_rollout:.3f}",
+                "rollout_delta_pct": fmt_pct(pct_delta(old_rollout, new_rollout)),
+                "decode_ms_old": f"{old_decode:.3f}",
+                "decode_ms_new": f"{new_decode:.3f}",
+                "decode_delta_pct": fmt_pct(pct_delta(old_decode, new_decode)),
+            }
+        )
+
+    label_slug = slugify_label(baseline_label)
+    out_csv = out_dir / f"stage12_delta_vs_{label_slug}.csv"
+    out_md = out_dir / f"stage12_delta_vs_{label_slug}.md"
+    write_csv(out_csv, delta_rows)
+
+    md: List[str] = []
+    md.append(f"# stage1.2 delta vs {baseline_label}")
+    md.append("")
+    md.append("## Per-split deltas (old -> new)")
+    md.append("| split | mode | rollout_tok/s | delta | decode_ms/token | delta |")
+    md.append("| --- | --- | --- | --- | --- | --- |")
+    for r in delta_rows:
+        md.append(
+            "| "
+            + " | ".join(
+                [
+                    r["split"],
+                    r["mode"],
+                    f"{r['rollout_tok_s_old']} -> {r['rollout_tok_s_new']}",
+                    r["rollout_delta_pct"],
+                    f"{r['decode_ms_old']} -> {r['decode_ms_new']}",
+                    r["decode_delta_pct"],
+                ]
+            )
+            + " |"
+        )
+    if not delta_rows:
+        md.append("| - | - | - | - | - | - |")
+
+    old_best = pick_best_row(baseline_summary)
+    new_best = pick_best_row(current_summary)
+    if old_best is not None and new_best is not None:
+        old_best_roll = safe_float(old_best.get("rollout_tok_s_est", "0"))
+        new_best_roll = safe_float(new_best.get("rollout_tok_s_est", "0"))
+        md.append("")
+        md.append("## Best config")
+        md.append(
+            f"- old best: `{old_best.get('split','')} {old_best.get('mode','')}` rollout "
+            f"`{old_best_roll:.3f}` tok/s, decode `{safe_float(old_best.get('decode_per_token_ms','0')):.3f}` ms/token"
+        )
+        md.append(
+            f"- new best: `{new_best.get('split','')} {new_best.get('mode','')}` rollout "
+            f"`{new_best_roll:.3f}` tok/s, decode `{safe_float(new_best.get('decode_per_token_ms','0')):.3f}` ms/token"
+        )
+        md.append(f"- best-to-best rollout change: `{fmt_pct(pct_delta(old_best_roll, new_best_roll))}`")
+        md.append(
+            f"- best-to-best decode change: "
+            f"`{fmt_pct(pct_delta(safe_float(old_best.get('decode_per_token_ms','0')), safe_float(new_best.get('decode_per_token_ms','0'))))}`"
+        )
+
+    old_ratio = read_rollout_vs_llama(baseline_vs_llama_csv)
+    new_ratio = read_rollout_vs_llama(current_vs_llama_csv)
+    if old_ratio is not None and new_ratio is not None:
+        md.append("")
+        md.append("## Ember vs llama dual (from each report)")
+        md.append(
+            f"- old: ember `{old_ratio[0]:.3f}` / llama dual `{old_ratio[1]:.3f}` = `{old_ratio[2]:.2f}%`"
+        )
+        md.append(
+            f"- new: ember `{new_ratio[0]:.3f}` / llama dual `{new_ratio[1]:.3f}` = `{new_ratio[2]:.2f}%`"
+        )
+        md.append("")
+        md.append("## Note")
+        md.append("- llama numbers are rerun-dependent; cross-date ratio change includes llama-side variance.")
+
+    out_md.write_text("\n".join(md) + "\n", encoding="utf-8")
+    return out_csv, out_md
+
+
+def write_p2_input(
+    out_path: Path,
+    model_dir: Path,
+    prompt_len: int,
+    decode_steps: int,
+    current_summary: List[Dict[str, str]],
+    baseline_summary: Optional[List[Dict[str, str]]],
+    baseline_label: str,
+    anchor_summary: Optional[List[Dict[str, str]]],
+    anchor_label: str,
+    current_vs_llama_csv: Optional[Path],
+    note: str,
+) -> None:
+    new_best = pick_best_row(current_summary)
+    if new_best is None:
+        return
+
+    lines: List[str] = []
+    lines.append(f"# Stage1.2 P2 Input ({dt.date.today().isoformat()})")
+    lines.append("")
+    lines.append(f"Model: {pretty_model_name(model_dir)} (2x3080Ti)")
+    lines.append(f"Setting: prompt_len={prompt_len}, decode_steps={decode_steps}, full split sweep")
+    lines.append("")
+    lines.append("## Best config (new)")
+    lines.append(f"- split/mode: {new_best.get('split','')} {new_best.get('mode','')}")
+    lines.append(f"- rollout: {safe_float(new_best.get('rollout_tok_s_est','0')):.3f} tok/s")
+    lines.append(f"- decode: {safe_float(new_best.get('decode_per_token_ms','0')):.3f} ms/token")
+    lines.append(f"- prefill: {safe_float(new_best.get('prefill_wall_ms','0')):.3f} ms")
+
+    if baseline_summary:
+        old_best = pick_best_row(baseline_summary)
+        if old_best is not None:
+            old_roll = safe_float(old_best.get("rollout_tok_s_est", "0"))
+            new_roll = safe_float(new_best.get("rollout_tok_s_est", "0"))
+            old_dec = safe_float(old_best.get("decode_per_token_ms", "0"))
+            new_dec = safe_float(new_best.get("decode_per_token_ms", "0"))
+            lines.append("")
+            lines.append(f"## Delta vs previous full sweep ({baseline_label})")
+            lines.append(
+                f"- old best: {old_best.get('split','')} {old_best.get('mode','')}, "
+                f"rollout {old_roll:.3f} tok/s, decode {old_dec:.3f} ms/token"
+            )
+            lines.append(
+                f"- new best: {new_best.get('split','')} {new_best.get('mode','')}, "
+                f"rollout {new_roll:.3f} tok/s, decode {new_dec:.3f} ms/token"
+            )
+            lines.append(f"- best rollout delta: {fmt_pct(pct_delta(old_roll, new_roll))}")
+            lines.append(f"- best decode delta: {fmt_pct(pct_delta(old_dec, new_dec))}")
+
+    if anchor_summary:
+        anchor_best = pick_best_row(anchor_summary)
+        if anchor_best is not None:
+            old_roll = safe_float(anchor_best.get("rollout_tok_s_est", "0"))
+            new_roll = safe_float(new_best.get("rollout_tok_s_est", "0"))
+            old_dec = safe_float(anchor_best.get("decode_per_token_ms", "0"))
+            new_dec = safe_float(new_best.get("decode_per_token_ms", "0"))
+            lines.append("")
+            lines.append(f"## Delta vs {anchor_label} (historical anchor)")
+            lines.append(
+                f"- old anchor best: {anchor_best.get('split','')} {anchor_best.get('mode','')}, "
+                f"rollout {old_roll:.3f} tok/s, decode {old_dec:.3f} ms/token"
+            )
+            lines.append(
+                f"- new best: {new_best.get('split','')} {new_best.get('mode','')}, "
+                f"rollout {new_roll:.3f} tok/s, decode {new_dec:.3f} ms/token"
+            )
+            lines.append(f"- rollout change: {fmt_pct(pct_delta(old_roll, new_roll))}")
+            lines.append(f"- decode change: {fmt_pct(pct_delta(old_dec, new_dec))}")
+
+    ratio = read_rollout_vs_llama(current_vs_llama_csv)
+    if ratio is not None:
+        lines.append("")
+        lines.append("## Ember vs llama dual (same run)")
+        lines.append(f"- llama dual rollout: {ratio[1]:.3f} tok/s")
+        lines.append(f"- ember best rollout: {ratio[0]:.3f} tok/s")
+        lines.append(f"- ember/llama dual: {ratio[2]:.2f}%")
+
+    if note.strip():
+        lines.append("")
+        lines.append("## Implementation note")
+        lines.append(f"- {note.strip()}")
+
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run Stage 1.2 split sweep profiling in one command.")
     ap.add_argument("--model", type=str, default=os.environ.get("MODEL_PATH", ""), help="model path or HF model id")
@@ -552,6 +829,12 @@ def main() -> None:
     ap.add_argument("--llama-dual-device", type=str, default="CUDA0/CUDA1")
     ap.add_argument("--llama-dual-split-mode", type=str, default="layer", choices=["none", "layer", "row"])
     ap.add_argument("--llama-dual-tensor-split", type=str, default="", help="optional tensor split ratios, e.g. 0.5/0.5")
+    ap.add_argument("--baseline-summary", type=str, default="", help="optional prior stage12_split_summary.csv for delta report")
+    ap.add_argument("--baseline-label", type=str, default="", help="optional label for --baseline-summary")
+    ap.add_argument("--baseline-vs-llama", type=str, default="", help="optional prior stage12_vs_llama.csv")
+    ap.add_argument("--anchor-summary", type=str, default="", help="optional historical stage12_split_summary.csv for P2 note")
+    ap.add_argument("--anchor-label", type=str, default="", help="optional label for --anchor-summary")
+    ap.add_argument("--p2-note", type=str, default="", help="optional implementation note appended to stage12_p2_input.md")
     ap.add_argument("--build-dir", type=str, default="build")
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
@@ -730,6 +1013,7 @@ def main() -> None:
         ],
     )
 
+    current_vs_llama_csv: Optional[Path] = None
     if args.include_llama:
         if not args.llama_bin_dir.strip():
             die("--llama-bin-dir is required with --include-llama")
@@ -827,6 +1111,62 @@ def main() -> None:
             split_mode=args.llama_dual_split_mode,
             tensor_split=args.llama_dual_tensor_split,
         )
+        current_vs_llama_csv = out_dir / "stage12_vs_llama.csv"
+
+    if current_vs_llama_csv is None:
+        current_vs_llama_csv = resolve_existing_csv("", out_dir / "stage12_vs_llama.csv")
+
+    baseline_summary_rows: Optional[List[Dict[str, str]]] = None
+    baseline_label = ""
+    baseline_vs_llama_csv: Optional[Path] = None
+    delta_csv: Optional[Path] = None
+    delta_md: Optional[Path] = None
+    if args.baseline_summary.strip():
+        baseline_summary_path = resolve_existing_csv(args.baseline_summary)
+        if baseline_summary_path is None:
+            die("invalid --baseline-summary")
+        baseline_summary_rows = read_csv(baseline_summary_path)
+        baseline_label = args.baseline_label.strip() or infer_label_from_summary(baseline_summary_path)
+        baseline_vs_llama_csv = resolve_existing_csv(
+            args.baseline_vs_llama,
+            baseline_summary_path.parent / "stage12_vs_llama.csv",
+        )
+        delta_csv, delta_md = write_delta_outputs(
+            out_dir=out_dir,
+            current_summary=summary_rows,
+            baseline_summary=baseline_summary_rows,
+            baseline_label=baseline_label,
+            current_vs_llama_csv=current_vs_llama_csv,
+            baseline_vs_llama_csv=baseline_vs_llama_csv,
+        )
+
+    anchor_summary_rows: Optional[List[Dict[str, str]]] = None
+    anchor_label = ""
+    if args.anchor_summary.strip():
+        anchor_summary_path = resolve_existing_csv(args.anchor_summary)
+        if anchor_summary_path is None:
+            die("invalid --anchor-summary")
+        anchor_summary_rows = read_csv(anchor_summary_path)
+        anchor_label = args.anchor_label.strip() or infer_label_from_summary(anchor_summary_path)
+
+    p2_md: Optional[Path] = None
+    if baseline_summary_rows is not None or anchor_summary_rows is not None or args.p2_note.strip() or current_vs_llama_csv is not None:
+        p2_md = out_dir / "stage12_p2_input.md"
+        write_p2_input(
+            out_path=p2_md,
+            model_dir=model_dir,
+            prompt_len=args.prompt_len,
+            decode_steps=args.decode_steps,
+            current_summary=summary_rows,
+            baseline_summary=baseline_summary_rows,
+            baseline_label=baseline_label,
+            anchor_summary=anchor_summary_rows,
+            anchor_label=anchor_label,
+            current_vs_llama_csv=current_vs_llama_csv,
+            note=args.p2_note,
+        )
+        if not p2_md.exists():
+            p2_md = None
 
     print("")
     print("[done] stage1.2 split profiling completed")
@@ -838,6 +1178,11 @@ def main() -> None:
     if args.include_llama:
         print(f"- vs llama csv: {out_dir / 'stage12_vs_llama.csv'}")
         print(f"- vs llama md: {out_dir / 'stage12_vs_llama.md'}")
+    if delta_csv is not None and delta_md is not None:
+        print(f"- delta csv: {delta_csv}")
+        print(f"- delta md: {delta_md}")
+    if p2_md is not None:
+        print(f"- p2 input md: {p2_md}")
     if failed_rows:
         print(f"- failures: {failures_csv} ({len(failed_rows)} failed runs)")
     else:
