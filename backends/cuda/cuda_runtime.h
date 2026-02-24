@@ -24,6 +24,8 @@ struct Qwen3LayerWeights {
     // MLP
     void* gate_proj_weight = nullptr;  // [intermediate_size, hidden_size]
     void* up_proj_weight = nullptr;    // [intermediate_size, hidden_size]
+    void* gate_up_proj_weight = nullptr;  // packed [2 * intermediate_size, hidden_size]
+    bool gate_up_proj_packed = false;
     void* down_proj_weight = nullptr;  // [hidden_size, intermediate_size]
     
     // LayerNorm
@@ -65,6 +67,7 @@ struct ActivationBuffers {
     void* attn_probs = nullptr;        // [batch, num_heads, seq_q, seq_k] (compute dtype)
     void* mlp_gate = nullptr;          // [batch, seq, intermediate_size]
     void* mlp_up = nullptr;            // [batch, seq, intermediate_size]
+    bool mlp_gate_up_packed = false;
     void* mlp_down = nullptr;          // [batch, seq, hidden_size]
     void* logits = nullptr;            // [batch, vocab_size] (仅最后一个 token)
     

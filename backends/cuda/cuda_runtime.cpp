@@ -646,9 +646,78 @@ Error CudaRuntime::load_layer_weights(int layer_idx, ModelWeightLoader& loader, 
     EMBER_RETURN_IF_ERROR(load_weight("self_attn.q_norm.weight", &layer.q_norm_weight));
     EMBER_RETURN_IF_ERROR(load_weight("self_attn.k_norm.weight", &layer.k_norm_weight));
     
-    // MLP
-    EMBER_RETURN_IF_ERROR(load_weight("mlp.gate_proj.weight", &layer.gate_proj_weight));
-    EMBER_RETURN_IF_ERROR(load_weight("mlp.up_proj.weight", &layer.up_proj_weight));
+    // MLP gate/up packed contiguously: [2 * intermediate_size, hidden_size]
+    // This enables decode fast path with one strided-batched GEMM for gate+up.
+    const std::string gate_name = prefix + "mlp.gate_proj.weight";
+    const std::string up_name = prefix + "mlp.up_proj.weight";
+    const SafetensorsMeta* gate_meta = loader.get_meta(gate_name);
+    const SafetensorsMeta* up_meta = loader.get_meta(up_name);
+    if (!gate_meta || !up_meta) {
+        return Error(ErrorCode::WEIGHT_NOT_FOUND,
+                     "Missing MLP gate/up weight at layer " + std::to_string(layer_idx));
+    }
+    if (gate_meta->shape != up_meta->shape) {
+        return Error(ErrorCode::INVALID_FORMAT,
+                     "MLP gate/up shape mismatch at layer " + std::to_string(layer_idx));
+    }
+
+    const size_t gate_elem_size = dtype_size(gate_meta->dtype);
+    const size_t up_elem_size = dtype_size(up_meta->dtype);
+    if (gate_elem_size == 0 || up_elem_size == 0) {
+        return Error(ErrorCode::INVALID_FORMAT,
+                     "Invalid MLP gate/up dtype at layer " + std::to_string(layer_idx));
+    }
+    if (gate_meta->data_size % gate_elem_size != 0 || up_meta->data_size % up_elem_size != 0) {
+        return Error(ErrorCode::INVALID_FORMAT,
+                     "Invalid MLP gate/up tensor size at layer " + std::to_string(layer_idx));
+    }
+
+    const size_t gate_count = gate_meta->data_size / gate_elem_size;
+    const size_t up_count = up_meta->data_size / up_elem_size;
+    if (gate_count != up_count) {
+        return Error(ErrorCode::INVALID_FORMAT,
+                     "MLP gate/up element count mismatch at layer " + std::to_string(layer_idx));
+    }
+
+    const size_t target_elem_size = dtype_size(weights_.dtype);
+    const size_t gate_bytes = gate_count * target_elem_size;
+    const size_t up_bytes = up_count * target_elem_size;
+    EMBER_RETURN_IF_ERROR(cuda::cuda_malloc(&layer.gate_up_proj_weight, gate_bytes + up_bytes, device_id));
+
+    void* gate_tmp = nullptr;
+    Error err = load_tensor_to_device(loader, gate_name, device_id, weights_.dtype, &gate_tmp);
+    if (err) {
+        cuda_free(layer.gate_up_proj_weight);
+        layer.gate_up_proj_weight = nullptr;
+        return err;
+    }
+    err = cuda::cuda_memcpy_d2d(layer.gate_up_proj_weight, gate_tmp, gate_bytes, device_id);
+    cuda_free(gate_tmp);
+    if (err) {
+        cuda_free(layer.gate_up_proj_weight);
+        layer.gate_up_proj_weight = nullptr;
+        return err;
+    }
+
+    void* up_tmp = nullptr;
+    err = load_tensor_to_device(loader, up_name, device_id, weights_.dtype, &up_tmp);
+    if (err) {
+        cuda_free(layer.gate_up_proj_weight);
+        layer.gate_up_proj_weight = nullptr;
+        return err;
+    }
+    void* up_dst = static_cast<void*>(static_cast<char*>(layer.gate_up_proj_weight) + gate_bytes);
+    err = cuda::cuda_memcpy_d2d(up_dst, up_tmp, up_bytes, device_id);
+    cuda_free(up_tmp);
+    if (err) {
+        cuda_free(layer.gate_up_proj_weight);
+        layer.gate_up_proj_weight = nullptr;
+        return err;
+    }
+
+    layer.gate_proj_weight = layer.gate_up_proj_weight;
+    layer.up_proj_weight = up_dst;
+    layer.gate_up_proj_packed = true;
     EMBER_RETURN_IF_ERROR(load_weight("mlp.down_proj.weight", &layer.down_proj_weight));
     
     // LayerNorms
@@ -707,9 +776,11 @@ Error CudaRuntime::allocate_activation_buffers(int max_seq_len, int batch_size, 
         CUDA_CHECK(cudaMalloc(&act.attn_scores, batch_size * nh * attn_q_max * attn_k_max * sizeof(float)));
         CUDA_CHECK(cudaMalloc(&act.attn_probs, batch_size * nh * attn_q_max * attn_k_max * elem_size));
         
-        // MLP 缓冲区
-        CUDA_CHECK(cudaMalloc(&act.mlp_gate, batch_size * max_seq_len * i * elem_size));
-        CUDA_CHECK(cudaMalloc(&act.mlp_up, batch_size * max_seq_len * i * elem_size));
+        // MLP 缓冲区（gate/up 连续布局，便于 decode batched GEMM）
+        const size_t mlp_proj_bytes = batch_size * max_seq_len * i * elem_size;
+        CUDA_CHECK(cudaMalloc(&act.mlp_gate, mlp_proj_bytes * 2));
+        act.mlp_up = static_cast<void*>(static_cast<char*>(act.mlp_gate) + mlp_proj_bytes);
+        act.mlp_gate_up_packed = true;
         CUDA_CHECK(cudaMalloc(&act.mlp_down, hidden_size));
         
         // Logits（只需要最后一个 token）
@@ -735,8 +806,14 @@ void CudaRuntime::free_activation_buffers() {
             cuda_free(act.attn_out);
             cuda_free(act.attn_scores);
             cuda_free(act.attn_probs);
-            cuda_free(act.mlp_gate);
-            cuda_free(act.mlp_up);
+            if (act.mlp_gate_up_packed) {
+                cuda_free(act.mlp_gate);
+                act.mlp_up = nullptr;
+                act.mlp_gate_up_packed = false;
+            } else {
+                cuda_free(act.mlp_gate);
+                cuda_free(act.mlp_up);
+            }
             cuda_free(act.mlp_down);
             cuda_free(act.logits);
             act.allocated = false;
@@ -832,11 +909,19 @@ void CudaRuntime::unload() {
             cuda_free(layer.o_proj_weight);
             cuda_free(layer.q_norm_weight);
             cuda_free(layer.k_norm_weight);
-            cuda_free(layer.gate_proj_weight);
-            cuda_free(layer.up_proj_weight);
+            if (layer.gate_up_proj_packed) {
+                cuda_free(layer.gate_up_proj_weight);
+            } else {
+                cuda_free(layer.gate_proj_weight);
+                cuda_free(layer.up_proj_weight);
+            }
             cuda_free(layer.down_proj_weight);
             cuda_free(layer.input_layernorm_weight);
             cuda_free(layer.post_attention_layernorm_weight);
+            layer.gate_proj_weight = nullptr;
+            layer.up_proj_weight = nullptr;
+            layer.gate_up_proj_weight = nullptr;
+            layer.gate_up_proj_packed = false;
             layer.allocated = false;
         }
     }
@@ -2585,19 +2670,52 @@ Error CudaRuntime::forward_layer(int layer_idx,
     // down = (gate * up) @ W_down
     // =====================================================================
     
-    // Gate projection: [M, hidden] @ [intermediate, hidden]^T = [M, intermediate]
-    CUBLAS_CHECK(cublasGemmEx(
-        cublas.get(),
-        CUBLAS_OP_T, CUBLAS_OP_N,
-        intermediate_size, M, hidden_size,
-        &alpha_one,
-        layer.gate_proj_weight, cuda_dtype, hidden_size,
-        act.norm_out, cuda_dtype, hidden_size,
-        &beta_zero,
-        act.mlp_gate, cuda_dtype, intermediate_size,
-        CUBLAS_COMPUTE_32F,
-        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-    ));
+    if (seq_len == 1 && layer.gate_up_proj_packed && act.mlp_gate_up_packed) {
+        const int64_t stride_a = static_cast<int64_t>(intermediate_size) * hidden_size;
+        const int64_t stride_c = static_cast<int64_t>(intermediate_size) *
+                                 static_cast<int64_t>(act.batch_size * act.max_seq_len);
+        CUBLAS_CHECK(cublasGemmStridedBatchedEx(
+            cublas.get(),
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            intermediate_size, M, hidden_size,
+            &alpha_one,
+            layer.gate_proj_weight, cuda_dtype, hidden_size, stride_a,
+            act.norm_out, cuda_dtype, hidden_size, 0,
+            &beta_zero,
+            act.mlp_gate, cuda_dtype, intermediate_size, stride_c,
+            2,
+            CUBLAS_COMPUTE_32F,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+        ));
+    } else {
+        // Gate projection: [M, hidden] @ [intermediate, hidden]^T = [M, intermediate]
+        CUBLAS_CHECK(cublasGemmEx(
+            cublas.get(),
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            intermediate_size, M, hidden_size,
+            &alpha_one,
+            layer.gate_proj_weight, cuda_dtype, hidden_size,
+            act.norm_out, cuda_dtype, hidden_size,
+            &beta_zero,
+            act.mlp_gate, cuda_dtype, intermediate_size,
+            CUBLAS_COMPUTE_32F,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+        ));
+
+        // Up projection
+        CUBLAS_CHECK(cublasGemmEx(
+            cublas.get(),
+            CUBLAS_OP_T, CUBLAS_OP_N,
+            intermediate_size, M, hidden_size,
+            &alpha_one,
+            layer.up_proj_weight, cuda_dtype, hidden_size,
+            act.norm_out, cuda_dtype, hidden_size,
+            &beta_zero,
+            act.mlp_up, cuda_dtype, intermediate_size,
+            CUBLAS_COMPUTE_32F,
+            CUBLAS_GEMM_DEFAULT_TENSOR_OP
+        ));
+    }
 
     if (session.runtime_config().check_correctness &&
         session.runtime_config().dump_layer == layer_idx) {
@@ -2608,20 +2726,6 @@ Error CudaRuntime::forward_layer(int layer_idx,
         if (err) return err;
     }
     
-    // Up projection
-    CUBLAS_CHECK(cublasGemmEx(
-        cublas.get(),
-        CUBLAS_OP_T, CUBLAS_OP_N,
-        intermediate_size, M, hidden_size,
-        &alpha_one,
-        layer.up_proj_weight, cuda_dtype, hidden_size,
-        act.norm_out, cuda_dtype, hidden_size,
-        &beta_zero,
-        act.mlp_up, cuda_dtype, intermediate_size,
-        CUBLAS_COMPUTE_32F,
-        CUBLAS_GEMM_DEFAULT_TENSOR_OP
-    ));
-
     if (session.runtime_config().check_correctness &&
         session.runtime_config().dump_layer == layer_idx) {
         Error err = dump_last_row(session.runtime_config().dump_dir,
