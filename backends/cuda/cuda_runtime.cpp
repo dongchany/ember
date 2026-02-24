@@ -2162,11 +2162,6 @@ Error CudaRuntime::forward_layer(int layer_idx,
         CUDA_CHECK(cudaEventRecord(ev.start, stream));
     }
     
-    // 保存 residual
-    size_t hidden_bytes = batch_size * seq_len * hidden_size * elem_size;
-    CUDA_CHECK(cudaMemcpyAsync(act.residual, act.hidden_states, hidden_bytes,
-                               cudaMemcpyDeviceToDevice, stream));
-    
     // =====================================================================
     // Input LayerNorm
     // =====================================================================
@@ -2569,7 +2564,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         layer.o_proj_weight, cuda_dtype, num_heads * head_dim,
         act.attn_out, cuda_dtype, num_heads * head_dim,
         &beta_zero,
-        act.hidden_states, cuda_dtype, hidden_size,
+        act.mlp_down, cuda_dtype, hidden_size,
         CUBLAS_COMPUTE_32F,
         CUBLAS_GEMM_DEFAULT_TENSOR_OP
     ));
@@ -2578,7 +2573,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         session.runtime_config().dump_layer == layer_idx) {
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_attn_out",
-                                     device_id, act.hidden_states,
+                                     device_id, act.mlp_down,
                                      seq_len, hidden_size, compute_dtype);
         if (err) return err;
     }
@@ -2589,16 +2584,16 @@ Error CudaRuntime::forward_layer(int layer_idx,
     if (compute_dtype == DType::BF16) {
         kernels::elementwise_add_bf16(
             static_cast<__nv_bfloat16*>(act.hidden_states),
+            static_cast<const __nv_bfloat16*>(act.mlp_down),
             static_cast<const __nv_bfloat16*>(act.hidden_states),
-            static_cast<const __nv_bfloat16*>(act.residual),
             batch_size * seq_len * hidden_size,
             stream
         );
     } else {
         kernels::elementwise_add_f16(
             static_cast<half*>(act.hidden_states),
+            static_cast<const half*>(act.mlp_down),
             static_cast<const half*>(act.hidden_states),
-            static_cast<const half*>(act.residual),
             batch_size * seq_len * hidden_size,
             stream
         );
@@ -2613,10 +2608,6 @@ Error CudaRuntime::forward_layer(int layer_idx,
         if (err) return err;
     }
     
-    // 保存新的 residual (用于 MLP 后的残差连接)
-    CUDA_CHECK(cudaMemcpyAsync(act.residual, act.hidden_states, hidden_bytes,
-                               cudaMemcpyDeviceToDevice, stream));
-
     if (profile_stages_) {
         auto& sev = layer_stage_events_[static_cast<size_t>(layer_idx)];
         CUDA_CHECK(cudaEventRecord(sev.attn_end, stream));
@@ -2812,7 +2803,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         layer.down_proj_weight, cuda_dtype, intermediate_size,
         act.mlp_gate, cuda_dtype, intermediate_size,
         &beta_zero,
-        act.hidden_states, cuda_dtype, hidden_size,
+        act.mlp_down, cuda_dtype, hidden_size,
         CUBLAS_COMPUTE_32F,
         CUBLAS_GEMM_DEFAULT_TENSOR_OP
     ));
@@ -2821,7 +2812,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         session.runtime_config().dump_layer == layer_idx) {
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_mlp_out",
-                                     device_id, act.hidden_states,
+                                     device_id, act.mlp_down,
                                      seq_len, hidden_size, compute_dtype);
         if (err) return err;
     }
@@ -2832,16 +2823,16 @@ Error CudaRuntime::forward_layer(int layer_idx,
     if (compute_dtype == DType::BF16) {
         kernels::elementwise_add_bf16(
             static_cast<__nv_bfloat16*>(act.hidden_states),
+            static_cast<const __nv_bfloat16*>(act.mlp_down),
             static_cast<const __nv_bfloat16*>(act.hidden_states),
-            static_cast<const __nv_bfloat16*>(act.residual),
             batch_size * seq_len * hidden_size,
             stream
         );
     } else {
         kernels::elementwise_add_f16(
             static_cast<half*>(act.hidden_states),
+            static_cast<const half*>(act.mlp_down),
             static_cast<const half*>(act.hidden_states),
-            static_cast<const half*>(act.residual),
             batch_size * seq_len * hidden_size,
             stream
         );
