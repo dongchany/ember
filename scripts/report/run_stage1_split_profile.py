@@ -1,30 +1,15 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 import json
 import os
 import re
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def split_ints(text: str) -> List[int]:
-    out: List[int] = []
-    for tok in text.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        out.append(int(tok))
-    return out
+from common_report import die, read_csv, safe_float, split_ints, write_csv
 
 
 def hf_hub_root() -> Path:
@@ -131,35 +116,6 @@ def auto_splits(num_layers: int) -> List[Tuple[int, int]]:
     if not out:
         die("failed to construct split sweep")
     return out
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
-    return rows
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]], fieldnames: Optional[List[str]] = None) -> None:
-    if fieldnames is None:
-        if rows:
-            fieldnames = list(rows[0].keys())
-        else:
-            return
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
 
 
 def looks_like_oom(text: str) -> bool:

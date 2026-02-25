@@ -1,27 +1,11 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def split_ints(text: str) -> List[int]:
-    out: List[int] = []
-    for tok in text.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        out.append(int(tok))
-    return out
+from common_report import die, read_csv, run_cmd, safe_float, split_ints
 
 
 def hf_hub_root() -> Path:
@@ -82,34 +66,6 @@ def resolve_adapter_dir(adapter_arg: str) -> Path:
     if not list(p.glob("*.safetensors")):
         die(f"no .safetensors found in adapter dir: {p}")
     return p
-
-
-def run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> subprocess.CompletedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("$ " + " ".join(cmd) + "\n\n")
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
-        f.write(p.stdout)
-        if p.stderr:
-            f.write("\n[stderr]\n")
-            f.write(p.stderr)
-    return p
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rows.append(r)
-    return rows
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
 
 
 def write_summary_md(path: Path, model_dir: Path, adapter_dir: Path, row: Dict[str, str]) -> None:
@@ -220,7 +176,7 @@ def main() -> None:
     if args.replace_existing:
         cmd.append("--replace-existing")
 
-    p = run_cmd(cmd, cwd=repo, log_path=logs_dir / "run.log")
+    p = run_cmd(cmd, cwd=repo, log_path=logs_dir / "run.log", check=False)
     if p.returncode != 0:
         die(f"benchmark failed rc={p.returncode}; see {logs_dir / 'run.log'}")
 

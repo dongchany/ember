@@ -2,27 +2,10 @@
 import argparse
 import csv
 import datetime as dt
-import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> subprocess.CompletedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("$ " + " ".join(cmd) + "\n\n")
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
-        f.write(p.stdout)
-        if p.stderr:
-            f.write("\n[stderr]\n")
-            f.write(p.stderr)
-    return p
+from common_report import die, run_cmd, safe_float, write_csv
 
 
 def read_policy_csv(path: Path) -> List[Dict[str, str]]:
@@ -41,28 +24,11 @@ def read_policy_csv(path: Path) -> List[Dict[str, str]]:
     return list(reader)
 
 
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
 def safe_int(v: str, default: int = 0) -> int:
     try:
         return int(float(v))
     except Exception:
         return default
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    if not rows:
-        return
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
 
 
 def main() -> None:
@@ -120,7 +86,7 @@ def main() -> None:
             "--csv",
             str(run_csv),
         ]
-        p = run_cmd(cmd, cwd=repo, log_path=logs_dir / f"{policy}.log")
+        p = run_cmd(cmd, cwd=repo, log_path=logs_dir / f"{policy}.log", check=False)
         if p.returncode != 0:
             die(f"policy sim failed for {policy}; see {logs_dir / (policy + '.log')}")
 

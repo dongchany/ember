@@ -283,43 +283,74 @@
 - `reports/stage14_cumulative_profile_4b_4096_20260225_mainline/stage14_summary.md`
 - `reports/stage14_cumulative_profile_4b_20260225_policy_mainline/stage14_summary.md`
 - `reports/stage14_cumulative_profile_4b_4096_20260225_policy_mainline/stage14_summary.md`
+- `reports/stage14_cumulative_profile_4b_20260225_policy_mainline_v2/stage14_summary.md`（含 Hybrid）
+- `reports/stage14_cumulative_profile_4b_4096_20260225_policy_mainline_v2/stage14_summary.md`（含 Hybrid）
 
 **当前可引用数字（30 轮，100 prompts × 8 candidates，2 GPUs）：**
-- 2048/128（policy-per-round=update_locality）: Prefix-only 相对 Naive 降 `7.275%`；UpdateLocality 降 `7.489%`
+- 2048/128（policy-per-round=update_locality）: Prefix-only 相对 Naive 降 `7.441%`；UpdateLocality 降 `7.544%`
 - 4096/64（base-profile-csv + policy-per-round=update_locality）: Prefix-only 相对 Naive 降 `15.538%`；UpdateLocality 降 `21.938%`
 
-### 4.2 Update Locality N Sweep（P1 Fig 4 — 关键 ablation）
+### 4.2 Update Locality N Sweep（P1 Fig 4 — 关键 ablation）[~]
 
-- [ ] N = 全冻结 / 75% / 50% / 25% / 全可训练
-- [ ] 每个 N：测量 prefill 加速比
-- [ ] 结合质量评估（如果训练闭环已通，测 F1；否则用 KV cache L2 error 作代理指标）
-- [ ] 输出推荐 N 范围和失败边界
+- [x] N = 全冻结 / 75% / 50% / 25% / 全可训练（用 recompute_ratio 代理）
+- [x] 每个 N：测量 prefill 加速比（累积 GPU-hours / speedup）
+- [x] 结合质量评估（当前用 LoRA delta freeze 风险代理；训练闭环后替换为任务 F1）
+- [x] 输出推荐 N 范围和失败边界（基于 quality_threshold）
 
 **依赖：** 3.1 + 3.3
 
-**新增产出（2026-02-25，模拟版）：**
+**新增产出（2026-02-25，模拟版 + 质量代理）：**
 - `scripts/report/run_stage1_locality_sweep.py`
 - `reports/stage42_locality_sweep_4b_20260225_mainline/stage42_locality_sweep.md`
+- `reports/stage42_locality_sweep_4b_20260225_mainline_v2/stage42_locality_sweep.md`
+- `reports/stage42_locality_sweep_4b_20260225_mainline_v2/stage42_p1_input.md`
 
-**当前可引用数字（30 轮，2048/128，periodic_refresh_k=10）：**
-- freeze_proxy=50%（recompute_ratio=0.5）: 相对 Naive 降 `6.764%`
-- freeze_proxy=75%（recompute_ratio=0.25）: 相对 Naive 降 `10.146%`
-- freeze_proxy=100%（recompute_ratio=0.0）: 相对 Naive 降 `13.527%`
+**当前可引用数字（30 轮，2048/128，periodic_refresh_k=10，quality_threshold=0.3）：**
+- recompute_ratio=0.50（freeze_layers≈18）: 降 `6.764%`，quality_proxy=`0.234375`（可接受）
+- recompute_ratio=0.25（freeze_layers≈27）: 降 `10.146%`，quality_proxy=`0.421875`（超阈值）
+- 推荐点：recompute_ratio=`0.50`（速度与质量约束平衡）
 
-### 4.3 策略谱系全面对比（P1 Table 1 — 论文主表）
+### 4.3 策略谱系全面对比（P1 Table 1 — 论文主表）[~]
 
-- [ ] 5 种 cache 策略在信息抽取任务上全面对比
-- [ ] 报告：累积 GPU-hours / 最终质量 / prefill 节省率 / cache 内存
+- [x] 5 种 cache 策略（Naive/Prefix/Update/Periodic/Hybrid）模拟汇总对比
+- [ ] 报告：累积 GPU-hours / 最终质量 / prefill 节省率 / cache 内存（质量与内存仍待真实闭环补齐）
 
 **依赖：** 4.1 + 4.2 + UpdatableKV 实现（如果纳入）
 
-### 4.4 UpdatableKV Sweep（决定 P5 是否独立）
+**新增产出（2026-02-25，模拟汇总版）：**
+- `scripts/report/run_stage43_strategy_table.py`
+- `reports/stage14_cumulative_profile_4b_20260225_policy_mainline_v2/stage14_summary.csv`
+- `reports/stage14_cumulative_profile_4b_4096_20260225_policy_mainline_v2/stage14_summary.csv`
+- `reports/stage14_cumulative_profile_4b_20260225_periodic_mainline_v2/stage14_summary.csv`
+- `reports/stage14_cumulative_profile_4b_4096_20260225_periodic_mainline_v2/stage14_summary.csv`
+- `reports/stage43_strategy_table_4b_20260225_mainline_v1/stage43_strategy_table.md`
+- `reports/stage43_strategy_table_4b_20260225_mainline_v1/stage43_p1_input.md`
 
-- [ ] Sweep LoRA rank r = 8/16/32/64 × refresh interval k = 1/5/10/20/50
-- [ ] 测量逐层修正误差（L2 norm）
-- [ ] 门控决策：多层误差可控 → P5 独立成文；否则并入 P1 一个 section
+**当前可引用数字（30 轮，100×8，2 GPUs）：**
+- 2048/128：Hybrid 相对 Naive 降 `11.389%`（Update=`7.544%`, Periodic=`6.764%`, Prefix=`7.441%`）
+- 4096/64：Hybrid 相对 Naive 降 `29.966%`（Update=`21.938%`, Periodic=`19.668%`, Prefix=`15.538%`）
+
+### 4.4 UpdatableKV Sweep（决定 P5 是否独立）[~]
+
+- [x] Sweep LoRA rank r = 8/16/32/64 × refresh interval k = 1/5/10/20/50（代理版）
+- [x] 测量逐层修正误差（当前用 `ΔK` 的低秩近似相对 Fro 误差代理）
+- [x] 门控决策（代理）：给出 rank-k 可行区域
+- [ ] 真实闭环版本复跑并替换代理假设（训练轮间真实漂移 + 任务质量）
 
 **依赖：** 3.1 + 3.3 + UpdatableKV 策略实现
+
+**新增产出（2026-02-25，代理版）：**
+- `scripts/report/run_stage44_updatablekv_sweep.py`
+- `reports/stage44_updatablekv_sweep_4b_20260225_peft_perturb_proxy_v1/stage44_summary.md`
+- `reports/stage44_updatablekv_sweep_4b_20260225_peft_perturb_proxy_seq1024_step2_v1/stage44_summary.md`
+- `reports/stage44_updatablekv_sweep_4b_20260225_kproj_only_proxy_v1/stage44_summary.md`
+- `reports/stage44_updatablekv_sweep_4b_20260225_peft_init_proxy_v1/stage44_summary.md`
+
+**当前可引用数字（seq_len=512, quality_threshold=0.3, 代理门控）：**
+- `peft_perturb_r8`：rank64 在 `k=1` 可行（proxy p95=`0.2423`）；`k>=5` 不可行
+- `peft_perturb_r8`（seq1024, step2）结论一致：rank64 仅 `k=1` 可行（proxy p95=`0.2569`）
+- `k_proj_only_r8`：rank64 在 `k=1` 接近阈值但仍超出（proxy p95=`0.3035`）
+- `peft_init_r8`：全 0（用于 sanity check）
 
 ---
 
@@ -327,22 +358,56 @@
 
 ### 5.1 验证器
 
-- [ ] 信息抽取验证器（JSON 校验 + schema 校验 + 字段匹配 + scalar reward 聚合）
-- [ ] SQL 验证器（SQLite 执行 + 结果集比对）
-- [ ] Reward 设计变体（Binary / Weighted / Field-level decomposed）
+- [x] 信息抽取验证器（JSON 校验 + schema 校验 + 字段匹配 + scalar reward 聚合）
+- [x] SQL 验证器（SQLite 执行 + 结果集比对）
+- [x] Reward 设计变体（Binary / Weighted / Field-level decomposed）
+
+**新增产出（2026-02-25）：**
+- `scripts/verifier/extraction_verifier.py`
+- `reports/stage51_extraction_verifier_smoke_20260225/out/stage51_summary.md`
+- `scripts/verifier/sql_verifier.py`
+- `reports/stage51_sql_verifier_smoke_20260225/out/stage51_sql_summary.md`
 
 ### 5.2 训练基线
 
 - [ ] SFT 基线（HF + PEFT LoRA SFT）
-- [ ] Best-of-N 基线
-- [ ] DPO 闭环（主实验）
+- [x] Best-of-N 基线（extraction，脚本与 smoke 跑通）
+- [~] DPO 闭环（最小训练环已打通，主实验待真实数据）
 - [ ] GRPO 对比（次要）
+
+**新增产出（2026-02-25）：**
+- `scripts/train/build_stage52_synth_extraction_dataset.py`
+- `scripts/train/run_stage52_best_of_n_extraction.py`
+- `scripts/train/run_stage52_build_dpo_pairs.py`
+- `scripts/train/run_stage52_build_synthetic_pairs_from_gold.py`
+- `scripts/train/run_stage52_dpo_min.py`
+- `reports/stage52_best_of_n_smoke_20260225/out/stage52_summary.md`
+- `reports/stage52_best_of_n_smoke_20260225/out_short/stage52_summary.md`
+- `reports/stage52_dpo_pairs_smoke_20260225/out/stage52_dpo_pairs_summary.md`
+- `reports/stage52_dpo_min_smoke_20260225/out/stage52_dpo_summary.md`
+- `reports/stage52_synth_dataset_4b_20260225_v1/dataset.jsonl`
+- `reports/stage52_synth_pairs_4b_20260225_v1/stage52_synth_pairs_summary.md`
+- `reports/stage52_dpo_min_4b_20260225_synth_v1_len128/stage52_dpo_summary.md`
+
+**备注：**
+- 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
+- `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
+- 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
 
 ### 5.3 统一后端优势证明
 
-- [ ] 双栈 vs 统一后端显存对比
-- [ ] 权重同步开销 vs 原地热更新延迟
+- [x] 双栈 vs 统一后端显存对比（model-only 视角）
+- [x] 权重同步开销 vs 原地热更新延迟（transfer estimate + measured hot-update）
 - [ ] 端到端 rollout+update 吞吐对比
+
+**新增产出（2026-02-25）：**
+- `scripts/report/run_stage53_unified_backend_advantage.py`
+- `reports/stage53_unified_backend_advantage_4b_20260225_mainline_v1/stage53_summary.md`
+
+**当前可引用数字（Qwen3-4B, 30 轮）：**
+- 模型权重 footprint：dual-stack `14.985 GiB` vs unified `7.492 GiB`（节省 `50%`）
+- 全量权重同步估算：`312.186 ms/round`（30 轮 `9365.592 ms`）
+- 实测原地热更新：`28.206 ms/round`（30 轮 `846.180 ms`）
 
 ---
 
@@ -438,10 +503,10 @@ P1 核心实验
 ## Done Criteria: "P1-ready"
 
 - [ ] P1 Fig 2（prefill share 曲线）：数据就绪 ✅，图待生成
-- [ ] P1 Fig 3（多轮累积对比）：待 4.1
-- [ ] P1 Fig 4（Update Locality sweep）：待 4.2
-- [ ] P1 Fig 5（UpdatableKV ablation）：待 4.4
-- [ ] P1 Table 1（策略谱系主表）：待 4.3
+- [ ] P1 Fig 3（多轮累积对比）：模拟版已就绪，待真实训练闭环复跑
+- [ ] P1 Fig 4（Update Locality sweep）：模拟+质量代理版已就绪，待闭环质量替换
+- [ ] P1 Fig 5（UpdatableKV ablation）：代理版已就绪，待真实闭环复跑
+- [ ] P1 Table 1（策略谱系主表）：模拟汇总版已就绪，待真实质量/内存列补齐
 - [ ] P1 Table 2（Baseline 对比表）：待 5.2 + 5.3
 - [ ] P1 Sec 4.4（Prefix cache 收益）：待 2.1
 - [ ] P1 Sec 5.6（权重同步零开销）：待 5.3

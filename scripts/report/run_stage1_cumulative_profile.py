@@ -1,39 +1,10 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
-def die(msg: str) -> None:
-    raise SystemExit(f"error: {msg}")
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rows.append(r)
-    return rows
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    if not rows:
-        return
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+from common_report import die, read_csv, safe_float, write_csv
 
 
 def find_stage12_row(
@@ -170,6 +141,8 @@ def main() -> None:
     ap.add_argument("--periodic-refresh-k", type=int, default=0, help="0 disables periodic full refresh")
     ap.add_argument("--policy-per-round", type=str, default="", help="optional stage33_policy_per_round.csv")
     ap.add_argument("--policy-name", type=str, default="update_locality", help="policy name in stage33 per-round csv")
+    ap.add_argument("--add-hybrid", action="store_true", help="add a Prefix+Locality hybrid strategy")
+    ap.add_argument("--hybrid-name", type=str, default="hybrid")
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
 
@@ -243,6 +216,7 @@ def main() -> None:
         )
 
     n_requests = args.num_prompts * args.num_candidates
+    prefix_prefill_per_round_ms = prefix_once_ms + float(n_requests) * suffix_per_req_ms
     per_round_ratio_override: Dict[int, float] = {}
     policy_note = "locality ratio from --locality-recompute-ratio + --periodic-refresh-k"
     if args.policy_per_round.strip():
@@ -260,32 +234,38 @@ def main() -> None:
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else (Path.cwd() / "reports" / f"stage14_cumulative_profile_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    def round_ratio(rnd: int) -> float:
+        if per_round_ratio_override:
+            return per_round_ratio_override[rnd]
+        if rnd <= 1:
+            return 1.0
+        refresh = (args.periodic_refresh_k > 0 and rnd % args.periodic_refresh_k == 0)
+        return 1.0 if refresh else args.locality_recompute_ratio
+
     per_round_rows: List[Dict[str, str]] = []
-    cumulative = {"naive": 0.0, "prefix_only": 0.0, "update_locality": 0.0}
+    cumulative: Dict[str, float] = {"naive": 0.0, "prefix_only": 0.0, "update_locality": 0.0}
+    if args.add_hybrid:
+        cumulative[args.hybrid_name] = 0.0
     for rnd in range(1, args.num_rounds + 1):
         naive_ms = per_round_ms_naive(n_requests, prefill_full_ms, decode_total_ms)
         prefix_ms = per_round_ms_prefix_only(n_requests, prefix_once_ms, suffix_per_req_ms, decode_total_ms)
-        if per_round_ratio_override:
-            ratio = per_round_ratio_override[rnd]
-            locality_ms = float(n_requests) * (prefill_full_ms * ratio + decode_total_ms)
-        else:
-            locality_ms = per_round_ms_update_locality(
-                n_requests=n_requests,
-                prefill_full_ms=prefill_full_ms,
-                decode_total_ms=decode_total_ms,
-                locality_recompute_ratio=args.locality_recompute_ratio,
-                round_idx_1based=rnd,
-                periodic_refresh_k=args.periodic_refresh_k,
-            )
+        ratio = round_ratio(rnd)
+        locality_ms = float(n_requests) * (prefill_full_ms * ratio + decode_total_ms)
+        hybrid_ms = (prefix_prefill_per_round_ms * ratio) + float(n_requests) * decode_total_ms
         cumulative["naive"] += naive_ms
         cumulative["prefix_only"] += prefix_ms
         cumulative["update_locality"] += locality_ms
+        if args.add_hybrid:
+            cumulative[args.hybrid_name] += hybrid_ms
 
-        for strategy, round_ms in [
+        strategy_rounds = [
             ("naive", naive_ms),
             ("prefix_only", prefix_ms),
             ("update_locality", locality_ms),
-        ]:
+        ]
+        if args.add_hybrid:
+            strategy_rounds.append((args.hybrid_name, hybrid_ms))
+        for strategy, round_ms in strategy_rounds:
             cum_ms = cumulative[strategy]
             wall_h = cum_ms / 1000.0 / 3600.0
             gpu_h = wall_h * float(args.num_gpus)
@@ -309,6 +289,7 @@ def main() -> None:
     end_naive = cumulative["naive"]
     end_prefix = cumulative["prefix_only"]
     end_locality = cumulative["update_locality"]
+    end_hybrid = cumulative.get(args.hybrid_name, 0.0)
 
     def reduction_pct(base: float, other: float) -> float:
         if base <= 0.0:
@@ -341,6 +322,17 @@ def main() -> None:
             "reduction_vs_naive_pct": f"{reduction_pct(end_naive, end_locality):.3f}",
         },
     ]
+    if args.add_hybrid:
+        summary_rows.append(
+            {
+                "num_rounds": str(args.num_rounds),
+                "strategy": args.hybrid_name,
+                "cumulative_ms": f"{end_hybrid:.3f}",
+                "cumulative_wall_hours": f"{(end_hybrid / 1000.0 / 3600.0):.6f}",
+                "cumulative_gpu_hours": f"{(end_hybrid / 1000.0 / 3600.0 * args.num_gpus):.6f}",
+                "reduction_vs_naive_pct": f"{reduction_pct(end_naive, end_hybrid):.3f}",
+            }
+        )
     write_csv(summary_csv, summary_rows)
 
     lines = [

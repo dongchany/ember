@@ -4,25 +4,11 @@ import csv
 import datetime as dt
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def split_ints(text: str) -> List[int]:
-    out: List[int] = []
-    for tok in text.split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        out.append(int(tok))
-    return out
+from common_report import die, read_csv, safe_float, split_ints, write_csv
 
 
 def hf_hub_root() -> Path:
@@ -90,15 +76,6 @@ def run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> Tuple[int, str, str]:
     return p.returncode, p.stdout, p.stderr
 
 
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            rows.append(row)
-    return rows
-
-
 def write_failures_csv(path: Path, rows: List[Dict[str, str]]) -> None:
     fieldnames = [
         "run_id",
@@ -115,24 +92,6 @@ def write_failures_csv(path: Path, rows: List[Dict[str, str]]) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    if not rows:
-        return
-    fieldnames = list(rows[0].keys())
-    with path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
 
 
 def safe_int(v: str, default: int = 0) -> int:

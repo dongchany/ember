@@ -1,48 +1,13 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
-def run_cmd(
-    cmd: List[str],
-    cwd: Path,
-    log_path: Path,
-    env: Optional[Dict[str, str]] = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("$ " + " ".join(cmd) + "\n\n")
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, env=merged_env)
-        f.write(p.stdout)
-        if p.stderr:
-            f.write("\n[stderr]\n")
-            f.write(p.stderr)
-    if check and p.returncode != 0:
-        raise RuntimeError(f"command failed rc={p.returncode}: {' '.join(cmd)} (see {log_path})")
-    return p
+from common_report import die, read_csv, run_cmd, safe_float, write_csv
 
 
 def run_cmd_json(
@@ -77,22 +42,6 @@ def run_cmd_json(
         return json.loads(payload)
     except Exception as ex:
         raise RuntimeError(f"failed to parse JSON output from {' '.join(cmd)}: {ex}") from ex
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]], fieldnames: List[str]) -> None:
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            out.append(r)
-    return out
 
 
 def hf_hub_root() -> Path:

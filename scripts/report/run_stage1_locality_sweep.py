@@ -1,38 +1,45 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
+
+from common_report import die, read_csv, safe_float, write_csv
 
 
-def die(msg: str) -> None:
-    raise SystemExit(f"error: {msg}")
+def load_freeze_quality_points(path: Path) -> List[Tuple[int, float]]:
+    rows = read_csv(path)
+    pts: List[Tuple[int, float]] = []
+    for r in rows:
+        try:
+            n = int(r.get("freeze_layers", "0"))
+            q = float(r.get("frozen_prefix_max_delta", "0"))
+        except Exception:
+            continue
+        pts.append((n, q))
+    if not pts:
+        die(f"no valid freeze quality points in {path}")
+    pts.sort(key=lambda x: x[0])
+    return pts
 
 
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    out: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            out.append(r)
-    return out
-
-
-def write_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    if not rows:
-        return
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+def interp_quality(freeze_layers: int, points: List[Tuple[int, float]]) -> Tuple[float, str]:
+    # Piecewise linear interpolation over measured freeze points.
+    if freeze_layers <= points[0][0]:
+        return points[0][1], "clamp_low"
+    if freeze_layers >= points[-1][0]:
+        return points[-1][1], "clamp_high"
+    for i in range(1, len(points)):
+        l0, q0 = points[i - 1]
+        l1, q1 = points[i]
+        if freeze_layers == l1:
+            return q1, "exact"
+        if l0 <= freeze_layers <= l1:
+            if l1 == l0:
+                return q1, "exact"
+            t = float(freeze_layers - l0) / float(l1 - l0)
+            return q0 + (q1 - q0) * t, "interp"
+    return points[-1][1], "clamp_high"
 
 
 def find_stage12_row(
@@ -64,8 +71,11 @@ def main() -> None:
     ap.add_argument("--num-candidates", type=int, default=8)
     ap.add_argument("--num-rounds", type=int, default=30)
     ap.add_argument("--num-gpus", type=int, default=2)
+    ap.add_argument("--num-layers", type=int, default=36)
     ap.add_argument("--recompute-ratios", type=str, default="1.0,0.75,0.5,0.25,0.0")
     ap.add_argument("--periodic-refresh-k", type=int, default=10)
+    ap.add_argument("--delta-freeze-summary", type=str, default="", help="stage31_lora_delta_freeze_summary.csv")
+    ap.add_argument("--quality-threshold", type=float, default=0.300000)
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
 
@@ -77,6 +87,8 @@ def main() -> None:
         die("--num-rounds must be > 0")
     if args.num_gpus <= 0:
         die("--num-gpus must be > 0")
+    if args.num_layers <= 0:
+        die("--num-layers must be > 0")
     if args.periodic_refresh_k < 0:
         die("--periodic-refresh-k must be >= 0")
 
@@ -104,6 +116,15 @@ def main() -> None:
     baseline_round_ms = float(requests_per_round) * (prefill_full_ms + decode_total_ms)
     baseline_total_ms = baseline_round_ms * float(args.num_rounds)
 
+    quality_points: List[Tuple[int, float]] = []
+    quality_note = "quality proxy disabled"
+    if args.delta_freeze_summary.strip():
+        qp = Path(args.delta_freeze_summary).expanduser().resolve()
+        if not qp.exists():
+            die(f"--delta-freeze-summary not found: {qp}")
+        quality_points = load_freeze_quality_points(qp)
+        quality_note = f"quality proxy from {qp.name}, threshold={args.quality_threshold:.6f}"
+
     out_rows: List[Dict[str, str]] = []
     for ratio in ratios:
         cumulative_ms = 0.0
@@ -123,16 +144,28 @@ def main() -> None:
             (baseline_total_ms - cumulative_ms) / baseline_total_ms * 100.0 if baseline_total_ms > 0.0 else 0.0
         )
         freeze_pct_proxy = (1.0 - ratio) * 100.0
+        freeze_layers_proxy = int(round((1.0 - ratio) * float(args.num_layers)))
+        freeze_layers_proxy = max(0, min(args.num_layers, freeze_layers_proxy))
+        quality_proxy = 0.0
+        quality_source = "na"
+        quality_ok = "na"
+        if quality_points:
+            quality_proxy, quality_source = interp_quality(freeze_layers_proxy, quality_points)
+            quality_ok = "1" if quality_proxy <= args.quality_threshold else "0"
 
         out_rows.append(
             {
                 "recompute_ratio": f"{ratio:.3f}",
                 "freeze_pct_proxy": f"{freeze_pct_proxy:.1f}",
+                "freeze_layers_proxy": str(freeze_layers_proxy),
                 "cumulative_ms": f"{cumulative_ms:.3f}",
                 "cumulative_wall_hours": f"{wall_h:.6f}",
                 "cumulative_gpu_hours": f"{gpu_h:.6f}",
                 "speedup_vs_naive_x": f"{speedup_vs_naive:.4f}",
                 "reduction_vs_naive_pct": f"{reduction_vs_naive:.3f}",
+                "quality_proxy_delta_max": f"{quality_proxy:.6f}",
+                "quality_proxy_source": quality_source,
+                "quality_ok": quality_ok,
             }
         )
 
@@ -152,9 +185,10 @@ def main() -> None:
         f"- Generated at: `{dt.datetime.now().isoformat(timespec='seconds')}`",
         f"- Base row: split={args.split}, mode={args.mode}, prompt_len={args.prompt_len}, decode_steps={args.decode_steps}",
         f"- Requests/round: {requests_per_round}, rounds={args.num_rounds}, periodic_refresh_k={args.periodic_refresh_k}",
+        f"- {quality_note}",
         "",
-        "| recompute_ratio | freeze_pct_proxy | cumulative_gpu_hours | speedup_vs_naive_x | reduction_vs_naive_% |",
-        "| --- | --- | --- | --- | --- |",
+        "| recompute_ratio | freeze_pct_proxy | freeze_layers_proxy | cumulative_gpu_hours | speedup_vs_naive_x | reduction_vs_naive_% | quality_proxy_delta_max | quality_ok |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in out_rows:
         lines.append(
@@ -163,24 +197,35 @@ def main() -> None:
                 [
                     r["recompute_ratio"],
                     r["freeze_pct_proxy"],
+                    r["freeze_layers_proxy"],
                     r["cumulative_gpu_hours"],
                     r["speedup_vs_naive_x"],
                     r["reduction_vs_naive_pct"],
+                    r["quality_proxy_delta_max"],
+                    r["quality_ok"],
                 ]
             )
             + " |"
         )
     out_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    best = max(out_rows, key=lambda r: safe_float(r["speedup_vs_naive_x"]))
+    if quality_points:
+        feasible = [r for r in out_rows if r.get("quality_ok", "0") == "1"]
+    else:
+        feasible = out_rows
+    best = max(feasible, key=lambda r: safe_float(r["speedup_vs_naive_x"])) if feasible else max(
+        out_rows, key=lambda r: safe_float(r["speedup_vs_naive_x"])
+    )
     p1_lines = [
         f"# Stage4.2 P1 Input ({dt.date.today().isoformat()})",
         "",
         f"Setting: split={args.split}, mode={args.mode}, prompt_len={args.prompt_len}, decode_steps={args.decode_steps}",
         f"Rounds={args.num_rounds}, requests_per_round={requests_per_round}, periodic_refresh_k={args.periodic_refresh_k}",
+        quality_note,
         "",
-        "## Best speedup point (simulation)",
+        "## Recommended point (speedup under quality constraint)",
         f"- recompute_ratio={best['recompute_ratio']} (freeze_proxy={best['freeze_pct_proxy']}%)",
+        f"- freeze_layers_proxy={best['freeze_layers_proxy']}, quality_proxy_delta_max={best['quality_proxy_delta_max']}, quality_ok={best['quality_ok']}",
         f"- speedup_vs_naive={best['speedup_vs_naive_x']}x, reduction_vs_naive={best['reduction_vs_naive_pct']}%",
     ]
     out_p1.write_text("\n".join(p1_lines) + "\n", encoding="utf-8")

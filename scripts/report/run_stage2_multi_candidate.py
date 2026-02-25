@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
 import argparse
-import csv
 import datetime as dt
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-
-def die(msg: str) -> None:
-    print(f"error: {msg}", file=sys.stderr)
-    raise SystemExit(1)
+from common_report import die, read_csv, run_cmd, safe_float
 
 
 def hf_hub_root() -> Path:
@@ -62,34 +56,6 @@ def resolve_model_dir(model_arg: str) -> Path:
         f"{raw}. Checked path='{p}' and HF cache='{model_cache_dir}'."
     )
     raise AssertionError("unreachable")
-
-
-def run_cmd(cmd: List[str], cwd: Path, log_path: Path) -> subprocess.CompletedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("$ " + " ".join(cmd) + "\n\n")
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True)
-        f.write(p.stdout)
-        if p.stderr:
-            f.write("\n[stderr]\n")
-            f.write(p.stderr)
-    return p
-
-
-def read_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rows.append(r)
-    return rows
-
-
-def safe_float(v: str, default: float = 0.0) -> float:
-    try:
-        return float(v)
-    except Exception:
-        return default
 
 
 def load_candidates(path: Path) -> List[Dict[str, object]]:
@@ -247,7 +213,7 @@ def main() -> None:
     if not args.decode_text:
         cmd += ["--no-decode-text"]
 
-    p = run_cmd(cmd, cwd=repo, log_path=logs_dir / "run.log")
+    p = run_cmd(cmd, cwd=repo, log_path=logs_dir / "run.log", check=False)
     if p.returncode != 0:
         die(f"benchmark failed rc={p.returncode}; see {logs_dir / 'run.log'}")
 
