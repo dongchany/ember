@@ -159,6 +159,8 @@
 - `reports/stage31_lora_delta_profile_4b_20260225_peft_perturb_mainline_v2/stage31_lora_delta_profile.csv`
 - `reports/stage31_lora_delta_profile_4b_20260225_peft_perturb_mainline_v2/stage31_lora_delta_freeze_summary.csv`
 - `reports/stage31_lora_delta_profile_4b_20260225_peft_perturb_mainline_v2/stage31_lora_delta_thresholds.csv`
+- `reports/stage31_lora_delta_profile_4b_20260225_peft_init_mainline_v2/stage31_lora_delta_profile.csv`
+- `reports/stage31_lora_delta_profile_4b_20260225_peft_init_mainline_v2/stage31_lora_delta_thresholds.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -175,6 +177,7 @@
 - Base/Lora hidden 对齐逐层剖析（非零扰动，v2）：`base_max(layer_35)=18.96875`，`lora_max(layer_35)=19.21875`，`delta_max(layer_35)=2.000267`
 - Delta 阈值穿越层位（v2）：`>=0.1 @ layer_4`，`>=0.25 @ layer_20`，`>=0.5 @ layer_28`，`>=1.0 @ layer_31`
 - Freeze 前缀风险摘要（v2，delta_max）：`freeze=18 -> 0.234375`，`freeze=24 -> 0.28125`，`freeze=30 -> 0.5625`
+- Zero-step PEFT init adapter 的逐层剖析（v2）：所有层 `delta_max_abs_diff=0.0`，但 `base_max(layer_35)=18.96875` 仍存在，说明 LoRA 路径与 PEFT 语义一致，剩余偏差主要来自 base forward 对齐
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
