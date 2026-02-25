@@ -165,6 +165,7 @@
 - LoRA numeric align（真实 PEFT 非零扰动 adapter）：`delta_max_abs_diff=0.26039124`（未通过 `1e-4`，该项继续 pending）
 - 单模块扰动诊断：`q=0.35316205`, `k=0.24981344`, `v=0.31881905`, `o=0.38927269`（均未通过）
 - LoRA 权重空间校验（真实 PEFT 非零扰动）：layer0 `q/k/v/o` 的 `delta_max_abs_diff ≈ 2.43e-4`；layer35 `q_proj=3.03e-4`
+- LoRA 权重空间校验（双卡 split=18+18 抽检）：layer18 `q_proj delta_max_abs_diff=2.597e-4`
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
