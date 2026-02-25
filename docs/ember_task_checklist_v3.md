@@ -43,27 +43,45 @@
 
 **产出文件：** `stage12_p2_input.md`, `stage12_delta_vs_20260224_opt_decode_residual_full.md`, `stage12_vs_llama.csv`
 
-### 1.3 跨框架对比表（部分完成）✅🔸
+### 1.3 跨框架对比表（已完成）✅
 
 - [x] Ember single + dual 实测数据
 - [x] llama.cpp single + dual 实测数据
 - [x] Transformers single(cuda:0) 实测数据（外部隔离 Python 环境）
-- [x] vLLM / SGLang 标记为 skipped（环境原因已记录）
-- [x] `run_framework_compare.py` 已支持 transformers 实测分支
+- [x] vLLM single(tp=2) 实测数据（独立 env）
+- [x] SGLang single(tp=1) 实测数据（独立 env）
+- [x] `run_framework_compare.py` 已支持 transformers / vLLM / SGLang 实测分支
 
 **产出文件：**
 - `reports/framework_compare_4b_20260225_mainline/framework_compare.csv`
 - `reports/framework_compare_4b_20260225_mainline/framework_compare.md`
 - `reports/framework_compare_4b_20260225_uv_mainline/framework_compare.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_mainline_v2/framework_compare.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_mainline_v2/framework_compare.md`
+- `reports/framework_compare_4b_20260225_envs_tp2_stable_mainline/framework_compare.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_stable_run2/framework_compare.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_stable_run3/framework_compare.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_stable_repeats/framework_compare_repeat_summary.csv`
+- `reports/framework_compare_4b_20260225_envs_tp2_stable_repeats/framework_compare_repeat_summary.md`
 - `scripts/report/bench_transformers_rollout.py`
+- `scripts/report/bench_vllm_rollout.py`
+- `scripts/report/bench_sglang_rollout.py`
 - `scripts/report/run_framework_compare.py`
+- `scripts/report/summarize_framework_compare_repeats.py`
 
-**当前可引用数字（2048/128）：**
-- Ember single(0): `48.504 tok/s`
-- Ember dual(0,1) split=9+27 overlap: `47.332 tok/s`
-- llama.cpp dual(CUDA0/CUDA1): `74.378 tok/s`
-- transformers single(cuda:0): `36.489 tok/s`
-- Ember dual / llama.cpp dual: `63.63%`
+**当前可引用数字（2048/128，stable: iters=8, warmup=2）：**
+- Ember single(0): `46.020 tok/s`
+- Ember dual(0,1) split=18+18 overlap: `46.520 tok/s`
+- vLLM single(tp=2): `47.956 tok/s`
+- SGLang single(tp=1): `62.917 tok/s`
+- Transformers single(cuda:0): `36.467 tok/s`
+- llama.cpp dual(CUDA0/CUDA1): `69.639 tok/s`
+
+**稳定性统计（3 次重复，same setting）：**
+- Ember dual(0,1): mean `47.122`, std `0.554`, CV `1.17%`
+- vLLM single(tp=2): mean `48.166`, std `0.643`, CV `1.33%`
+- SGLang single(tp=1): mean `65.145`, std `1.941`, CV `2.98%`
+- llama.cpp dual(CUDA0/CUDA1): mean `71.142`, std `1.350`, CV `1.90%`
 
 ---
 
@@ -97,7 +115,7 @@
 
 - [ ] 用 1.1 实测数据替换 talk 稿中的 `XX%` 占位符（prefill share）
 - [ ] 用 2.1 实测数据替换 prefix cache 节省比例占位符
-- [ ] 内部走一遍 45 分钟计时，确认节奏
+- [ ] 内部走一遍 60 分钟计时，确认节奏
 - [ ] 准备几张关键图表（prefill share 曲线、prefix cache 对比、架构图）
 
 **里程碑：Talk 就绪** 🏁
@@ -270,10 +288,10 @@
 
 ### 6.1 跨框架对比补全（P2 需要）
 
-- [—] `run_framework_compare.py` 补 vLLM 实测分支
+- [x] `run_framework_compare.py` 补 vLLM 实测分支
 - [x] `run_framework_compare.py` 补 Transformers 实测分支
-- [—] SGLang 实测（如环境可用）
-- **延后原因：** Ember 单次推理吞吐为 llama.cpp 的 68%，补更多框架对比对当前叙事无帮助。等 Ember 有量化支持或 FlashAttention 后再做更有意义。
+- [x] SGLang 实测（独立 env）
+- **备注：** 当前已具备跨框架基线数据，后续仅在参数统一（batch / TP / cache policy）或新增量化后再刷新。
 
 ### 6.2 P2 引擎论文
 

@@ -57,12 +57,23 @@ def run_cmd_json(
     payload = (p.stdout or "").strip()
     if not payload:
         payload = "{}"
-    if not payload.startswith("{"):
-        lb = payload.find("{")
-        rb = payload.rfind("}")
-        if lb >= 0 and rb > lb:
-            payload = payload[lb:rb + 1]
+    # Benchmark scripts may emit framework logs around the final JSON payload.
+    # Extract the last parseable JSON object from mixed stdout.
+    dec = json.JSONDecoder()
+    best_obj: Optional[Dict[str, object]] = None
+    if payload and not payload.startswith("{"):
+        starts = [i for i, ch in enumerate(payload) if ch == "{"]
+        for i in reversed(starts):
+            try:
+                obj, _ = dec.raw_decode(payload[i:])
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                best_obj = obj
+                break
     try:
+        if best_obj is not None:
+            return best_obj
         return json.loads(payload)
     except Exception as ex:
         raise RuntimeError(f"failed to parse JSON output from {' '.join(cmd)}: {ex}") from ex
@@ -341,6 +352,105 @@ def run_transformers_case(
     )
 
 
+def run_vllm_case(
+    repo: Path,
+    logs_dir: Path,
+    python_bin: str,
+    model_dir: Path,
+    prompt_len: int,
+    decode_steps: int,
+    iters: int,
+    warmup: int,
+    tp_size: int,
+    gpu_memory_utilization: float,
+    max_num_seqs: int,
+    enforce_eager: bool,
+) -> Tuple[float, float, float, float]:
+    bench_script = repo / "scripts" / "report" / "bench_vllm_rollout.py"
+    if not bench_script.exists():
+        raise FileNotFoundError(f"missing script: {bench_script}")
+    cmd = [
+        python_bin,
+        str(bench_script),
+        "--model",
+        str(model_dir),
+        "--prompt-len",
+        str(prompt_len),
+        "--decode-steps",
+        str(decode_steps),
+        "--dtype",
+        "float16",
+        "--tensor-parallel-size",
+        str(tp_size),
+        "--gpu-memory-utilization",
+        str(gpu_memory_utilization),
+        "--max-num-seqs",
+        str(max_num_seqs),
+        "--iters",
+        str(iters),
+        "--warmup",
+        str(warmup),
+    ]
+    if enforce_eager:
+        cmd.append("--enforce-eager")
+    out = run_cmd_json(
+        cmd=cmd,
+        cwd=repo,
+        log_path=logs_dir / "vllm.log",
+    )
+    return (
+        float(out.get("prefill_ms", 0.0)),
+        float(out.get("decode_per_token_ms", 0.0)),
+        float(out.get("rollout_total_ms", 0.0)),
+        float(out.get("rollout_tok_s", 0.0)),
+    )
+
+
+def run_sglang_case(
+    repo: Path,
+    logs_dir: Path,
+    python_bin: str,
+    model_dir: Path,
+    prompt_len: int,
+    decode_steps: int,
+    iters: int,
+    warmup: int,
+    tp_size: int,
+) -> Tuple[float, float, float, float]:
+    bench_script = repo / "scripts" / "report" / "bench_sglang_rollout.py"
+    if not bench_script.exists():
+        raise FileNotFoundError(f"missing script: {bench_script}")
+    cmd = [
+        python_bin,
+        str(bench_script),
+        "--model",
+        str(model_dir),
+        "--prompt-len",
+        str(prompt_len),
+        "--decode-steps",
+        str(decode_steps),
+        "--dtype",
+        "float16",
+        "--tp-size",
+        str(tp_size),
+        "--iters",
+        str(iters),
+        "--warmup",
+        str(warmup),
+    ]
+    out = run_cmd_json(
+        cmd=cmd,
+        cwd=repo,
+        log_path=logs_dir / "sglang.log",
+    )
+    return (
+        float(out.get("prefill_ms", 0.0)),
+        float(out.get("decode_per_token_ms", 0.0)),
+        float(out.get("rollout_total_ms", 0.0)),
+        float(out.get("rollout_tok_s", 0.0)),
+    )
+
+
 def build_row(
     engine: str,
     scenario: str,
@@ -429,6 +539,11 @@ def main() -> None:
     ap.add_argument("--transformers-python-bin", type=str, default="")
     ap.add_argument("--vllm-python-bin", type=str, default="")
     ap.add_argument("--sglang-python-bin", type=str, default="")
+    ap.add_argument("--vllm-tp-size", type=int, default=1)
+    ap.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.8)
+    ap.add_argument("--vllm-max-num-seqs", type=int, default=32)
+    ap.add_argument("--vllm-enforce-eager", action="store_true", default=False)
+    ap.add_argument("--sglang-tp-size", type=int, default=1)
     ap.add_argument("--include-vllm", action="store_true", default=True)
     ap.add_argument("--no-include-vllm", dest="include_vllm", action="store_false")
     ap.add_argument("--include-sglang", action="store_true", default=True)
@@ -544,31 +659,84 @@ def main() -> None:
     if args.include_vllm:
         has_vllm = check_python_module(vllm_python, "vllm")
         if has_vllm:
-            rows.append(
-                build_row(
-                    "vllm",
-                    "env-check",
-                    "skipped",
-                    notes="vllm module detected, but benchmark harness is not wired in this runner yet",
+            try:
+                pms, dms, tms, tps = run_vllm_case(
+                    repo=repo,
+                    logs_dir=logs_dir,
+                    python_bin=vllm_python,
+                    model_dir=model_dir,
+                    prompt_len=args.prompt_len,
+                    decode_steps=args.decode_steps,
+                    iters=args.iters,
+                    warmup=args.warmup,
+                    tp_size=args.vllm_tp_size,
+                    gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+                    max_num_seqs=args.vllm_max_num_seqs,
+                    enforce_eager=args.vllm_enforce_eager,
                 )
-            )
+                rows.append(
+                    build_row(
+                        "vllm",
+                        f"single(tp={args.vllm_tp_size})",
+                        "ok",
+                        pms,
+                        dms,
+                        tms,
+                        tps,
+                        notes=f"python={vllm_python}",
+                    )
+                )
+            except Exception as ex:
+                rows.append(
+                    build_row(
+                        "vllm",
+                        f"single(tp={args.vllm_tp_size})",
+                        "error",
+                        notes=str(ex),
+                    )
+                )
         else:
-            rows.append(build_row("vllm", "env-check", "skipped", notes="python module vllm not installed"))
+            rows.append(build_row("vllm", "env-check", "skipped", notes=f"python module vllm not installed in {vllm_python}"))
 
     # SGLang availability marker
     if args.include_sglang:
         has_sglang = check_python_module(sglang_python, "sglang")
         if has_sglang:
-            rows.append(
-                build_row(
-                    "sglang",
-                    "env-check",
-                    "skipped",
-                    notes="sglang module detected, but benchmark harness is not wired in this runner yet",
+            try:
+                pms, dms, tms, tps = run_sglang_case(
+                    repo=repo,
+                    logs_dir=logs_dir,
+                    python_bin=sglang_python,
+                    model_dir=model_dir,
+                    prompt_len=args.prompt_len,
+                    decode_steps=args.decode_steps,
+                    iters=args.iters,
+                    warmup=args.warmup,
+                    tp_size=args.sglang_tp_size,
                 )
-            )
+                rows.append(
+                    build_row(
+                        "sglang",
+                        f"single(tp={args.sglang_tp_size})",
+                        "ok",
+                        pms,
+                        dms,
+                        tms,
+                        tps,
+                        notes=f"python={sglang_python}",
+                    )
+                )
+            except Exception as ex:
+                rows.append(
+                    build_row(
+                        "sglang",
+                        f"single(tp={args.sglang_tp_size})",
+                        "error",
+                        notes=str(ex),
+                    )
+                )
         else:
-            rows.append(build_row("sglang", "env-check", "skipped", notes="python module sglang not installed"))
+            rows.append(build_row("sglang", "env-check", "skipped", notes=f"python module sglang not installed in {sglang_python}"))
 
     # HF transformers benchmark
     if args.include_transformers:
