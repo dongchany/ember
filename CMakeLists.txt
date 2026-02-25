@@ -248,6 +248,13 @@ target_link_libraries(ember_lora_hot_update_benchmark PRIVATE
     ember_infer
 )
 
+add_executable(ember_lora_weight_merge_check
+    benchmarks/lora_weight_merge_check.cpp
+)
+target_link_libraries(ember_lora_weight_merge_check PRIVATE
+    ember_infer
+)
+
 add_executable(ember_serve_benchmark
     benchmarks/serve_benchmark.cpp
 )

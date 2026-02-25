@@ -1031,6 +1031,86 @@ Error CudaRuntime::apply_lora_adapter(const std::string& adapter_dir,
     return Error::success();
 }
 
+Error CudaRuntime::debug_copy_attention_weight(int layer_idx,
+                                               const std::string& proj,
+                                               std::vector<float>& out,
+                                               int* out_dim,
+                                               int* in_dim) const {
+    if (!loaded_) {
+        return Error(ErrorCode::MODEL_NOT_LOADED, "Model not loaded");
+    }
+    if (layer_idx < 0 || layer_idx >= config_.num_layers) {
+        return Error::invalid_argument("layer_idx out of range");
+    }
+
+    const auto& layer = weights_.layers[static_cast<size_t>(layer_idx)];
+    const void* w_ptr = nullptr;
+    int o_dim = 0;
+    int i_dim = 0;
+    if (proj == "q_proj") {
+        w_ptr = layer.q_proj_weight;
+        o_dim = config_.num_heads * config_.head_dim;
+        i_dim = config_.hidden_size;
+    } else if (proj == "k_proj") {
+        w_ptr = layer.k_proj_weight;
+        o_dim = config_.num_kv_heads * config_.head_dim;
+        i_dim = config_.hidden_size;
+    } else if (proj == "v_proj") {
+        w_ptr = layer.v_proj_weight;
+        o_dim = config_.num_kv_heads * config_.head_dim;
+        i_dim = config_.hidden_size;
+    } else if (proj == "o_proj") {
+        w_ptr = layer.o_proj_weight;
+        o_dim = config_.hidden_size;
+        i_dim = config_.num_heads * config_.head_dim;
+    } else {
+        return Error::invalid_argument("unsupported proj: " + proj);
+    }
+    if (w_ptr == nullptr) {
+        return Error(ErrorCode::WEIGHT_NOT_FOUND, "target weight ptr is null");
+    }
+
+    const size_t n = static_cast<size_t>(o_dim) * static_cast<size_t>(i_dim);
+    const size_t elem = dtype_size(weights_.dtype);
+    if (elem == 0) {
+        return Error(ErrorCode::INVALID_FORMAT, "invalid weight dtype");
+    }
+
+    std::vector<uint8_t> host_raw(n * elem);
+    cudaError_t cu = cudaSetDevice(layer.device_id);
+    if (cu != cudaSuccess) {
+        return Error::cuda_error(std::string("cudaSetDevice failed: ") + cudaGetErrorString(cu));
+    }
+    cu = cudaMemcpy(host_raw.data(), w_ptr, host_raw.size(), cudaMemcpyDeviceToHost);
+    if (cu != cudaSuccess) {
+        return Error::cuda_error(std::string("cudaMemcpy D2H failed: ") + cudaGetErrorString(cu));
+    }
+
+    out.resize(n);
+    if (weights_.dtype == DType::F16) {
+        const uint16_t* p = reinterpret_cast<const uint16_t*>(host_raw.data());
+        for (size_t idx = 0; idx < n; ++idx) {
+            __half_raw raw{};
+            raw.x = p[idx];
+            out[idx] = __half2float(static_cast<__half>(raw));
+        }
+    } else if (weights_.dtype == DType::BF16) {
+        const uint16_t* p = reinterpret_cast<const uint16_t*>(host_raw.data());
+        for (size_t idx = 0; idx < n; ++idx) {
+            out[idx] = bf16_to_f32(p[idx]);
+        }
+    } else if (weights_.dtype == DType::F32) {
+        const float* p = reinterpret_cast<const float*>(host_raw.data());
+        std::copy(p, p + n, out.begin());
+    } else {
+        return Error(ErrorCode::INVALID_FORMAT, "unsupported weight dtype for debug copy");
+    }
+
+    if (out_dim) *out_dim = o_dim;
+    if (in_dim) *in_dim = i_dim;
+    return Error::success();
+}
+
 Error CudaRuntime::allocate_activation_buffers(int max_seq_len, int batch_size, int attn_q_max, int attn_k_max) {
     if (!activations_.empty() && 
         activations_[0].max_seq_len >= static_cast<size_t>(max_seq_len) &&

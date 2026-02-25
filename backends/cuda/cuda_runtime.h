@@ -125,6 +125,14 @@ public:
                              float scale = 1.0f,
                              bool replace_existing = false,
                              LoraApplyStats* stats = nullptr);
+
+    // Debug helper: copy one attention projection weight matrix to host as float32.
+    // Layout is row-major [out_dim, in_dim], same as model weights.
+    Error debug_copy_attention_weight(int layer_idx,
+                                      const std::string& proj,
+                                      std::vector<float>& out,
+                                      int* out_dim = nullptr,
+                                      int* in_dim = nullptr) const;
     
     MemoryEstimate estimate_memory(const ModelConfig& config, 
                                    int ctx_len, int batch_size) override;
