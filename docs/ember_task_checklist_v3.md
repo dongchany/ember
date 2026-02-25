@@ -47,19 +47,23 @@
 
 - [x] Ember single + dual 实测数据
 - [x] llama.cpp single + dual 实测数据
-- [x] vLLM / SGLang / Transformers 标记为 skipped（环境原因已记录）
-- [x] `run_framework_compare.py` 脚手架完成
+- [x] Transformers single(cuda:0) 实测数据（外部隔离 Python 环境）
+- [x] vLLM / SGLang 标记为 skipped（环境原因已记录）
+- [x] `run_framework_compare.py` 已支持 transformers 实测分支
 
 **产出文件：**
 - `reports/framework_compare_4b_20260225_mainline/framework_compare.csv`
 - `reports/framework_compare_4b_20260225_mainline/framework_compare.md`
+- `reports/framework_compare_4b_20260225_uv_mainline/framework_compare.csv`
+- `scripts/report/bench_transformers_rollout.py`
 - `scripts/report/run_framework_compare.py`
 
 **当前可引用数字（2048/128）：**
-- Ember single(0): `48.536 tok/s`
-- Ember dual(0,1) split=9+27 overlap: `47.297 tok/s`
-- llama.cpp dual(CUDA0/CUDA1): `74.065 tok/s`
-- Ember dual / llama.cpp dual: `63.86%`
+- Ember single(0): `48.504 tok/s`
+- Ember dual(0,1) split=9+27 overlap: `47.332 tok/s`
+- llama.cpp dual(CUDA0/CUDA1): `74.378 tok/s`
+- transformers single(cuda:0): `36.489 tok/s`
+- Ember dual / llama.cpp dual: `63.63%`
 
 ---
 
@@ -267,7 +271,7 @@
 ### 6.1 跨框架对比补全（P2 需要）
 
 - [—] `run_framework_compare.py` 补 vLLM 实测分支
-- [—] `run_framework_compare.py` 补 Transformers 实测分支
+- [x] `run_framework_compare.py` 补 Transformers 实测分支
 - [—] SGLang 实测（如环境可用）
 - **延后原因：** Ember 单次推理吞吐为 llama.cpp 的 68%，补更多框架对比对当前叙事无帮助。等 Ember 有量化支持或 FlashAttention 后再做更有意义。
 

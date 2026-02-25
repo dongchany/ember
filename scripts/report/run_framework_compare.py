@@ -45,6 +45,29 @@ def run_cmd(
     return p
 
 
+def run_cmd_json(
+    cmd: List[str],
+    cwd: Path,
+    log_path: Path,
+    env: Optional[Dict[str, str]] = None,
+) -> Dict[str, object]:
+    p = run_cmd(cmd=cmd, cwd=cwd, log_path=log_path, env=env, check=False)
+    if p.returncode != 0:
+        raise RuntimeError(f"command failed rc={p.returncode}: {' '.join(cmd)} (see {log_path})")
+    payload = (p.stdout or "").strip()
+    if not payload:
+        payload = "{}"
+    if not payload.startswith("{"):
+        lb = payload.find("{")
+        rb = payload.rfind("}")
+        if lb >= 0 and rb > lb:
+            payload = payload[lb:rb + 1]
+    try:
+        return json.loads(payload)
+    except Exception as ex:
+        raise RuntimeError(f"failed to parse JSON output from {' '.join(cmd)}: {ex}") from ex
+
+
 def write_csv(path: Path, rows: List[Dict[str, str]], fieldnames: List[str]) -> None:
     with path.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -274,6 +297,50 @@ def run_llama_case(
     return prefill_ms, decode_per_token_ms, rollout_total_ms, rollout_tok_s
 
 
+def run_transformers_case(
+    repo: Path,
+    logs_dir: Path,
+    python_bin: str,
+    model_dir: Path,
+    prompt_len: int,
+    decode_steps: int,
+    iters: int,
+    warmup: int,
+) -> Tuple[float, float, float, float]:
+    bench_script = repo / "scripts" / "report" / "bench_transformers_rollout.py"
+    if not bench_script.exists():
+        raise FileNotFoundError(f"missing script: {bench_script}")
+    cmd = [
+        python_bin,
+        str(bench_script),
+        "--model",
+        str(model_dir),
+        "--prompt-len",
+        str(prompt_len),
+        "--decode-steps",
+        str(decode_steps),
+        "--device",
+        "cuda:0",
+        "--dtype",
+        "float16",
+        "--iters",
+        str(iters),
+        "--warmup",
+        str(warmup),
+    ]
+    out = run_cmd_json(
+        cmd=cmd,
+        cwd=repo,
+        log_path=logs_dir / "transformers.log",
+    )
+    return (
+        float(out.get("prefill_ms", 0.0)),
+        float(out.get("decode_per_token_ms", 0.0)),
+        float(out.get("rollout_total_ms", 0.0)),
+        float(out.get("rollout_tok_s", 0.0)),
+    )
+
+
 def build_row(
     engine: str,
     scenario: str,
@@ -359,6 +426,9 @@ def main() -> None:
     ap.add_argument("--llama-bin-dir", type=str, default="/home/dong/workspace/llama.cpp/build/bin")
     ap.add_argument("--gguf", type=str, default="reports/gguf/Qwen3-4B-BF16.gguf")
     ap.add_argument("--python-bin", type=str, default="python3")
+    ap.add_argument("--transformers-python-bin", type=str, default="")
+    ap.add_argument("--vllm-python-bin", type=str, default="")
+    ap.add_argument("--sglang-python-bin", type=str, default="")
     ap.add_argument("--include-vllm", action="store_true", default=True)
     ap.add_argument("--no-include-vllm", dest="include_vllm", action="store_false")
     ap.add_argument("--include-sglang", action="store_true", default=True)
@@ -466,9 +536,13 @@ def main() -> None:
         except Exception as ex:
             rows.append(build_row("llama.cpp", "dual(CUDA0/CUDA1)", "error", notes=str(ex)))
 
+    tf_python = args.transformers_python_bin.strip() or args.python_bin
+    vllm_python = args.vllm_python_bin.strip() or args.python_bin
+    sglang_python = args.sglang_python_bin.strip() or args.python_bin
+
     # vLLM availability marker
     if args.include_vllm:
-        has_vllm = check_python_module(args.python_bin, "vllm")
+        has_vllm = check_python_module(vllm_python, "vllm")
         if has_vllm:
             rows.append(
                 build_row(
@@ -483,7 +557,7 @@ def main() -> None:
 
     # SGLang availability marker
     if args.include_sglang:
-        has_sglang = check_python_module(args.python_bin, "sglang")
+        has_sglang = check_python_module(sglang_python, "sglang")
         if has_sglang:
             rows.append(
                 build_row(
@@ -496,19 +570,43 @@ def main() -> None:
         else:
             rows.append(build_row("sglang", "env-check", "skipped", notes="python module sglang not installed"))
 
-    # HF transformers availability marker
+    # HF transformers benchmark
     if args.include_transformers:
-        has_torch = check_python_module(args.python_bin, "torch")
-        has_tf = check_python_module(args.python_bin, "transformers")
+        has_torch = check_python_module(tf_python, "torch")
+        has_tf = check_python_module(tf_python, "transformers")
         if has_torch and has_tf:
-            rows.append(
-                build_row(
-                    "transformers",
-                    "env-check",
-                    "skipped",
-                    notes="torch+transformers detected, but benchmark harness is not wired in this runner yet",
+            try:
+                pms, dms, tms, tps = run_transformers_case(
+                    repo=repo,
+                    logs_dir=logs_dir,
+                    python_bin=tf_python,
+                    model_dir=model_dir,
+                    prompt_len=args.prompt_len,
+                    decode_steps=args.decode_steps,
+                    iters=args.iters,
+                    warmup=args.warmup,
                 )
-            )
+                rows.append(
+                    build_row(
+                        "transformers",
+                        "single(cuda:0)",
+                        "ok",
+                        pms,
+                        dms,
+                        tms,
+                        tps,
+                        notes=f"python={tf_python}",
+                    )
+                )
+            except Exception as ex:
+                rows.append(
+                    build_row(
+                        "transformers",
+                        "single(cuda:0)",
+                        "error",
+                        notes=str(ex),
+                    )
+                )
         else:
             missing = []
             if not has_torch:
@@ -520,7 +618,7 @@ def main() -> None:
                     "transformers",
                     "env-check",
                     "skipped",
-                    notes=f"missing python module(s): {', '.join(missing)}",
+                    notes=f"missing python module(s) in {tf_python}: {', '.join(missing)}",
                 )
             )
 
