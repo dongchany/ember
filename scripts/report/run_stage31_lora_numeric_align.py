@@ -205,6 +205,23 @@ def hf_lora_logits_peft(
     return logits_lora
 
 
+def hf_lora_logits_manual_merge(
+    model: AutoModelForCausalLM,
+    adapter_dir: Path,
+    tokens: List[int],
+    device: str,
+    lora_scale: float,
+) -> torch.Tensor:
+    updated = apply_lora_inplace_hf(model, adapter_dir, lora_scale)
+    if updated <= 0:
+        die("manual HF merge updated zero matrices")
+    input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
+    with torch.no_grad():
+        out = model(input_ids, use_cache=False)
+        logits_lora = out.logits[0, -1].float().cpu()
+    return logits_lora
+
+
 def compute_diff(a: torch.Tensor, b: torch.Tensor) -> Tuple[float, float]:
     d = (a - b).abs()
     return float(d.max().item()), float(d.mean().item())
@@ -257,6 +274,7 @@ def main() -> None:
     ap.add_argument("--lora-scale", type=float, default=1.0)
     ap.add_argument("--hf-device", type=str, default="cuda:0")
     ap.add_argument("--hf-dtype", type=str, default="float16", choices=["float16", "bfloat16", "float32"])
+    ap.add_argument("--hf-lora-ref", type=str, default="peft_forward", choices=["peft_forward", "manual_merge"])
     ap.add_argument("--delta-max-threshold", type=float, default=1e-4)
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
@@ -322,18 +340,28 @@ def main() -> None:
         device=args.hf_device,
         dtype=args.hf_dtype,
     )
-    del model
-    torch.cuda.empty_cache()
-    gc.collect()
-
-    # HF LoRA reference: prefer PEFT forward path for exact adapter semantics.
-    hf_lora = hf_lora_logits_peft(
-        model_dir=model_dir,
-        adapter_dir=adapter_dir,
-        tokens=tokens_base,
-        device=args.hf_device,
-        dtype=args.hf_dtype,
-    )
+    if args.hf_lora_ref == "peft_forward":
+        del model
+        torch.cuda.empty_cache()
+        gc.collect()
+        hf_lora = hf_lora_logits_peft(
+            model_dir=model_dir,
+            adapter_dir=adapter_dir,
+            tokens=tokens_base,
+            device=args.hf_device,
+            dtype=args.hf_dtype,
+        )
+    else:
+        hf_lora = hf_lora_logits_manual_merge(
+            model=model,
+            adapter_dir=adapter_dir,
+            tokens=tokens_base,
+            device=args.hf_device,
+            lora_scale=args.lora_scale,
+        )
+        del model
+        torch.cuda.empty_cache()
+        gc.collect()
 
     updated = count_complete_lora_pairs(adapter_dir)
     hf_delta = hf_lora - hf_base
@@ -349,7 +377,7 @@ def main() -> None:
         "mode": "stage31_lora_numeric_align",
         "model_dir": str(model_dir),
         "adapter_dir": str(adapter_dir),
-        "hf_lora_ref": "peft_forward",
+        "hf_lora_ref": args.hf_lora_ref,
         "prompt": args.prompt,
         "devices": args.devices,
         "hf_device": args.hf_device,

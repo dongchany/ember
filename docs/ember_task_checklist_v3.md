@@ -168,7 +168,11 @@
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_block_align_profile.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_attn_residual_decomp.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline_v2/stage31_attn_residual_decomp.csv`
+- `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v4/stage31_attn_residual_decomp.csv`
+- `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline_v4/stage31_attn_residual_decomp.csv`
 - `reports/stage31_lora_numeric_align_dtype_sweep_4b_20260225_mainline/stage31_dtype_sweep.csv`
+- `reports/stage31_lora_numeric_align_4b_20260225_peft_perturb_peft_forward_sweep/stage31_lora_numeric_align.csv`
+- `reports/stage31_lora_numeric_align_4b_20260225_peft_perturb_manual_merge_sweep/stage31_lora_numeric_align.csv`
 - `reports/stage31_base_operator_spotcheck_4b_20260225_mainline/stage31_base_operator_spotcheck.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
@@ -197,6 +201,10 @@
   - init adapter：`delta_max_abs_diff=0.0`（全部通过）
   - perturb adapter：`delta_max_abs_diff` 仍为 `0.26039124`（float16）, `0.51296234`（bfloat16）, `0.26371694`（float32@cpu）
   - 结论：非零 adapter 的端到端 delta 不对齐并非单纯由 HF dtype 选择造成
+- HF LoRA reference path sweep（float16, perturb adapter）：
+  - `peft_forward`: `delta_max_abs_diff=0.26039124`
+  - `manual_merge`: `delta_max_abs_diff=0.25601959`
+  - 结论：两条参考路径一致，偏差并非 PEFT 封装语义导致
 - Base operator spotcheck（layer0/1）：
   - layer1: `post_attn_norm_max_abs_diff=4.198868`, `gate_proj_max_abs_diff=6.213398`
   - 但在 `Ember norm input` 下：`gate_proj_max_abs_diff=0.031280`

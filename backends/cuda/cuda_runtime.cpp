@@ -84,7 +84,7 @@ static void f32_to_bf16(const float* src, uint16_t* dst, size_t count) {
 
 static Error dump_last_row(const std::string& dump_dir, const std::string& name,
                            int device_id, const void* data, int seq_len,
-                           int row_size, DType dtype) {
+                           int row_size, DType dtype, cudaStream_t stream = nullptr) {
     if (seq_len <= 0 || row_size <= 0) {
         return Error::success();
     }
@@ -97,6 +97,11 @@ static Error dump_last_row(const std::string& dump_dir, const std::string& name,
     size_t offset = static_cast<size_t>(seq_len - 1) * row_size * elem_size;
     const char* base = static_cast<const char*>(data);
     const void* src = base + offset;
+
+    CUDA_CHECK(cudaSetDevice(device_id));
+    if (stream != nullptr) {
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
     
     std::vector<float> out(static_cast<size_t>(row_size));
     
@@ -2545,6 +2550,17 @@ Error CudaRuntime::forward_layer(int layer_idx,
         auto& ev = profile_events_[device_id];
         CUDA_CHECK(cudaEventRecord(ev.start, stream));
     }
+
+    if (session.runtime_config().check_correctness) {
+        int target = session.runtime_config().dump_layer;
+        if (target < 0 || target == layer_idx) {
+            Error err = dump_last_row(session.runtime_config().dump_dir,
+                                      "layer_" + std::to_string(layer_idx) + "_layer_input",
+                                      device_id, act.hidden_states,
+                                      seq_len, hidden_size, compute_dtype, stream);
+            if (err) return err;
+        }
+    }
     
     // =====================================================================
     // Input LayerNorm
@@ -2958,7 +2974,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_attn_out",
                                      device_id, act.mlp_down,
-                                     seq_len, hidden_size, compute_dtype);
+                                     seq_len, hidden_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -2988,7 +3004,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_attn_residual",
                                      device_id, act.hidden_states,
-                                     seq_len, hidden_size, compute_dtype);
+                                     seq_len, hidden_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -3034,7 +3050,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_post_attn_norm",
                                      device_id, act.norm_out,
-                                     seq_len, hidden_size, compute_dtype);
+                                     seq_len, hidden_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -3097,7 +3113,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                   "layer_" + std::to_string(layer_idx) + "_mlp_gate_pre",
                                   device_id, act.mlp_gate,
-                                  seq_len, intermediate_size, compute_dtype);
+                                  seq_len, intermediate_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -3106,7 +3122,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                   "layer_" + std::to_string(layer_idx) + "_mlp_up",
                                   device_id, act.mlp_up,
-                                  seq_len, intermediate_size, compute_dtype);
+                                  seq_len, intermediate_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -3133,7 +3149,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                   "layer_" + std::to_string(layer_idx) + "_mlp_gate_act",
                                   device_id, act.mlp_gate,
-                                  seq_len, intermediate_size, compute_dtype);
+                                  seq_len, intermediate_size, compute_dtype, stream);
         if (err) return err;
 
         if (compute_dtype == DType::BF16) {
@@ -3157,7 +3173,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         err = dump_last_row(session.runtime_config().dump_dir,
                             "layer_" + std::to_string(layer_idx) + "_mlp_mul",
                             device_id, act.mlp_gate,
-                            seq_len, intermediate_size, compute_dtype);
+                            seq_len, intermediate_size, compute_dtype, stream);
         if (err) return err;
     } else {
         // Fast path: fuse SiLU + mul (SwiGLU) to cut one launch and one global write+read.
@@ -3197,7 +3213,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "layer_" + std::to_string(layer_idx) + "_mlp_out",
                                      device_id, act.mlp_down,
-                                     seq_len, hidden_size, compute_dtype);
+                                     seq_len, hidden_size, compute_dtype, stream);
         if (err) return err;
     }
     
@@ -3233,7 +3249,7 @@ Error CudaRuntime::forward_layer(int layer_idx,
         if (target < 0 || target == layer_idx) {
             std::string name = "layer_" + std::to_string(layer_idx) + "_last_hidden";
             Error err = dump_last_row(session.runtime_config().dump_dir, name, device_id,
-                                         act.hidden_states, seq_len, hidden_size, compute_dtype);
+                                         act.hidden_states, seq_len, hidden_size, compute_dtype, stream);
             if (err) return err;
         }
     }
@@ -3305,7 +3321,7 @@ Error CudaRuntime::forward_final_norm(int batch_size, int seq_len, Session& sess
         Error err = dump_last_row(session.runtime_config().dump_dir,
                                      "final_norm_last_hidden",
                                      lm_device, act.norm_out,
-                                     seq_len, config_.hidden_size, compute_dtype);
+                                     seq_len, config_.hidden_size, compute_dtype, stream);
         if (err) return err;
     }
     

@@ -293,19 +293,6 @@ def load_ember_block(
     return read_f32(p, size)
 
 
-def load_ember_layer_input(
-    debug_all_dir: Path,
-    layer: int,
-    hidden_size: int,
-) -> Optional[torch.Tensor]:
-    if layer <= 0:
-        return None
-    p = debug_all_dir / f"layer_{layer - 1}_last_hidden.bin"
-    if not p.exists():
-        return None
-    return read_f32(p, hidden_size)
-
-
 def attn_residual_decomp(
     e_in: torch.Tensor,
     e_attn: torch.Tensor,
@@ -403,34 +390,8 @@ def main() -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     debug_base_root = out_dir / "debug_base"
     debug_lora_root = out_dir / "debug_lora"
-    debug_base_all = out_dir / "debug_base_all"
-    debug_lora_all = out_dir / "debug_lora_all"
     debug_base_root.mkdir(parents=True, exist_ok=True)
     debug_lora_root.mkdir(parents=True, exist_ok=True)
-
-    run_ember_check(
-        repo=repo,
-        ember_bin=ember_bin,
-        model_dir=model_dir,
-        prompt=args.prompt,
-        devices=args.devices,
-        dump_layer=-1,
-        dump_dir=debug_base_all,
-        log_path=logs_dir / "ember_base_all.log",
-        adapter_dir=None,
-    )
-    run_ember_check(
-        repo=repo,
-        ember_bin=ember_bin,
-        model_dir=model_dir,
-        prompt=args.prompt,
-        devices=args.devices,
-        dump_layer=-1,
-        dump_dir=debug_lora_all,
-        log_path=logs_dir / "ember_lora_all.log",
-        adapter_dir=adapter_dir,
-        lora_scale=args.lora_scale,
-    )
 
     for layer in layers:
         run_ember_check(
@@ -457,14 +418,14 @@ def main() -> None:
             lora_scale=args.lora_scale,
         )
 
-    meta = read_meta(debug_base_all / "meta.json")
+    meta = read_meta(debug_base_root / f"layer_{layers[0]}" / "meta.json")
     hidden_size = int(meta["hidden_size"])
     intermediate_size = (
         int(meta["intermediate_size"])
         if "intermediate_size" in meta
         else read_intermediate_size(model_dir=model_dir, hidden_size=hidden_size)
     )
-    tokens = read_tokens(debug_base_all / "tokens.txt")
+    tokens = read_tokens(debug_base_root / f"layer_{layers[0]}" / "tokens.txt")
     if not tokens:
         die("empty tokenized prompt")
 
@@ -498,12 +459,8 @@ def main() -> None:
         hf_b = hf_base.get(layer, {})
         hf_l = hf_lora.get(layer, {})
         for block in blocks:
-            if block == "layer_input":
-                eb = load_ember_layer_input(debug_base_all, layer, hidden_size)
-                el = load_ember_layer_input(debug_lora_all, layer, hidden_size)
-            else:
-                eb = load_ember_block(dbg_b, layer, block, hidden_size, intermediate_size)
-                el = load_ember_block(dbg_l, layer, block, hidden_size, intermediate_size)
+            eb = load_ember_block(dbg_b, layer, block, hidden_size, intermediate_size)
+            el = load_ember_block(dbg_l, layer, block, hidden_size, intermediate_size)
             hb = hf_b.get(block)
             hl = hf_l.get(block)
             if eb is None or el is None or hb is None or hl is None:
@@ -528,8 +485,8 @@ def main() -> None:
             )
 
         # Decompose residual mismatch into input + attn terms.
-        eb_in = load_ember_layer_input(debug_base_all, layer, hidden_size)
-        el_in = load_ember_layer_input(debug_lora_all, layer, hidden_size)
+        eb_in = load_ember_block(dbg_b, layer, "layer_input", hidden_size, intermediate_size)
+        el_in = load_ember_block(dbg_l, layer, "layer_input", hidden_size, intermediate_size)
         eb_attn = load_ember_block(dbg_b, layer, "attn_out", hidden_size, intermediate_size)
         el_attn = load_ember_block(dbg_l, layer, "attn_out", hidden_size, intermediate_size)
         eb_res = load_ember_block(dbg_b, layer, "attn_residual", hidden_size, intermediate_size)
