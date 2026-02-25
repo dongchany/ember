@@ -164,6 +164,9 @@
 - `reports/stage31_lora_delta_profile_4b_20260225_peft_init_mainline_v2/stage31_lora_delta_thresholds.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline/stage31_block_align_profile.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline/stage31_block_align_profile.csv`
+- `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_block_align_profile.csv`
+- `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_attn_residual_decomp.csv`
+- `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline_v2/stage31_attn_residual_decomp.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -183,6 +186,10 @@
 - Zero-step PEFT init adapter 的逐层剖析（v2）：所有层 `delta_max_abs_diff=0.0`，但 `base_max(layer_35)=18.96875` 仍存在，说明 LoRA 路径与 PEFT 语义一致，剩余偏差主要来自 base forward 对齐
 - Block 级剖析（layers=31-35, perturb adapter）：最大 `delta` 出现在 `attn_residual`（layer32/33/34 达 `1.75`），而同层 `attn_out/post_attn_norm` 显著更小，指向“偏差主要由上游 residual 路径带入并放大”，而非单点 LoRA merge 公式错误
 - Block 级剖析（layers=31-35, init adapter）：全 block `delta_max_abs_diff=0.0`，进一步确认 LoRA 注入与 PEFT 语义一致
+- `attn_residual = layer_input + attn_out` 来源分解（v2）：
+  - perturb adapter: `max(delta_residual)=1.75`, `max(delta_gap)=0.9609375`
+  - init adapter: `max(delta_residual)=0.0`, `max(delta_gap)=0.0`
+  - `delta_input_max` 在 layer33/35 与 `delta_residual_max` 等幅（share=1.0），而 `delta_attn_max` 显著更小，说明 LoRA-delta 偏差主来源是 layer input 路径（上游累积）而不是当前层 attn_out
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 

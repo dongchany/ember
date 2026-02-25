@@ -124,6 +124,14 @@ def collect_hf_blocks(
     captures: Dict[int, Dict[str, torch.Tensor]] = {i: {} for i in layers}
     handles = []
 
+    def on_layer_input(layer_idx: int) -> Callable:
+        def _hook(_module, inp):
+            if not inp:
+                return
+            captures[layer_idx]["layer_input"] = _last_token_cpu(inp[0])
+
+        return _hook
+
     def on_self_attn(layer_idx: int) -> Callable:
         def _hook(_module, _inp, out):
             y = out[0] if isinstance(out, (tuple, list)) else out
@@ -174,6 +182,7 @@ def collect_hf_blocks(
         if layer_idx < 0 or layer_idx >= len(model_layers):
             die(f"layer out of range: {layer_idx} (num_layers={len(model_layers)})")
         lyr = model_layers[layer_idx]
+        handles.append(lyr.register_forward_pre_hook(on_layer_input(layer_idx)))
         handles.append(lyr.self_attn.register_forward_hook(on_self_attn(layer_idx)))
         handles.append(lyr.post_attention_layernorm.register_forward_pre_hook(on_post_norm_pre(layer_idx)))
         handles.append(lyr.post_attention_layernorm.register_forward_hook(on_post_norm(layer_idx)))
@@ -284,6 +293,46 @@ def load_ember_block(
     return read_f32(p, size)
 
 
+def load_ember_layer_input(
+    debug_all_dir: Path,
+    layer: int,
+    hidden_size: int,
+) -> Optional[torch.Tensor]:
+    if layer <= 0:
+        return None
+    p = debug_all_dir / f"layer_{layer - 1}_last_hidden.bin"
+    if not p.exists():
+        return None
+    return read_f32(p, hidden_size)
+
+
+def attn_residual_decomp(
+    e_in: torch.Tensor,
+    e_attn: torch.Tensor,
+    e_res: torch.Tensor,
+    h_in: torch.Tensor,
+    h_attn: torch.Tensor,
+    h_res: torch.Tensor,
+) -> Dict[str, float]:
+    in_diff = e_in - h_in
+    attn_diff = e_attn - h_attn
+    res_diff = e_res - h_res
+    sum_diff = in_diff + attn_diff
+    gap = res_diff - sum_diff
+    return {
+        "input_max": float(in_diff.abs().max().item()),
+        "input_mean": float(in_diff.abs().mean().item()),
+        "attn_max": float(attn_diff.abs().max().item()),
+        "attn_mean": float(attn_diff.abs().mean().item()),
+        "residual_max": float(res_diff.abs().max().item()),
+        "residual_mean": float(res_diff.abs().mean().item()),
+        "sum_max": float(sum_diff.abs().max().item()),
+        "sum_mean": float(sum_diff.abs().mean().item()),
+        "gap_max": float(gap.abs().max().item()),
+        "gap_mean": float(gap.abs().mean().item()),
+    }
+
+
 def write_md(
     path: Path,
     rows: List[Dict[str, str]],
@@ -354,8 +403,34 @@ def main() -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
     debug_base_root = out_dir / "debug_base"
     debug_lora_root = out_dir / "debug_lora"
+    debug_base_all = out_dir / "debug_base_all"
+    debug_lora_all = out_dir / "debug_lora_all"
     debug_base_root.mkdir(parents=True, exist_ok=True)
     debug_lora_root.mkdir(parents=True, exist_ok=True)
+
+    run_ember_check(
+        repo=repo,
+        ember_bin=ember_bin,
+        model_dir=model_dir,
+        prompt=args.prompt,
+        devices=args.devices,
+        dump_layer=-1,
+        dump_dir=debug_base_all,
+        log_path=logs_dir / "ember_base_all.log",
+        adapter_dir=None,
+    )
+    run_ember_check(
+        repo=repo,
+        ember_bin=ember_bin,
+        model_dir=model_dir,
+        prompt=args.prompt,
+        devices=args.devices,
+        dump_layer=-1,
+        dump_dir=debug_lora_all,
+        log_path=logs_dir / "ember_lora_all.log",
+        adapter_dir=adapter_dir,
+        lora_scale=args.lora_scale,
+    )
 
     for layer in layers:
         run_ember_check(
@@ -382,14 +457,14 @@ def main() -> None:
             lora_scale=args.lora_scale,
         )
 
-    meta = read_meta(debug_base_root / f"layer_{layers[0]}" / "meta.json")
+    meta = read_meta(debug_base_all / "meta.json")
     hidden_size = int(meta["hidden_size"])
     intermediate_size = (
         int(meta["intermediate_size"])
         if "intermediate_size" in meta
         else read_intermediate_size(model_dir=model_dir, hidden_size=hidden_size)
     )
-    tokens = read_tokens(debug_base_root / f"layer_{layers[0]}" / "tokens.txt")
+    tokens = read_tokens(debug_base_all / "tokens.txt")
     if not tokens:
         die("empty tokenized prompt")
 
@@ -403,6 +478,7 @@ def main() -> None:
     )
 
     blocks = [
+        "layer_input",
         "attn_out",
         "attn_residual",
         "post_attn_norm",
@@ -415,14 +491,19 @@ def main() -> None:
     ]
 
     rows: List[Dict[str, str]] = []
+    decomp_rows: List[Dict[str, str]] = []
     for layer in layers:
         dbg_b = debug_base_root / f"layer_{layer}"
         dbg_l = debug_lora_root / f"layer_{layer}"
         hf_b = hf_base.get(layer, {})
         hf_l = hf_lora.get(layer, {})
         for block in blocks:
-            eb = load_ember_block(dbg_b, layer, block, hidden_size, intermediate_size)
-            el = load_ember_block(dbg_l, layer, block, hidden_size, intermediate_size)
+            if block == "layer_input":
+                eb = load_ember_layer_input(debug_base_all, layer, hidden_size)
+                el = load_ember_layer_input(debug_lora_all, layer, hidden_size)
+            else:
+                eb = load_ember_block(dbg_b, layer, block, hidden_size, intermediate_size)
+                el = load_ember_block(dbg_l, layer, block, hidden_size, intermediate_size)
             hb = hf_b.get(block)
             hl = hf_l.get(block)
             if eb is None or el is None or hb is None or hl is None:
@@ -443,6 +524,51 @@ def main() -> None:
                     "delta_max_abs_diff": f"{dmax:.8f}",
                     "delta_mean_abs_diff": f"{dmean:.8f}",
                     "delta_over_base_max_ratio": f"{safe_ratio(dmax, bmax):.8f}",
+                }
+            )
+
+        # Decompose residual mismatch into input + attn terms.
+        eb_in = load_ember_layer_input(debug_base_all, layer, hidden_size)
+        el_in = load_ember_layer_input(debug_lora_all, layer, hidden_size)
+        eb_attn = load_ember_block(dbg_b, layer, "attn_out", hidden_size, intermediate_size)
+        el_attn = load_ember_block(dbg_l, layer, "attn_out", hidden_size, intermediate_size)
+        eb_res = load_ember_block(dbg_b, layer, "attn_residual", hidden_size, intermediate_size)
+        el_res = load_ember_block(dbg_l, layer, "attn_residual", hidden_size, intermediate_size)
+        hb_in = hf_b.get("layer_input")
+        hl_in = hf_l.get("layer_input")
+        hb_attn = hf_b.get("attn_out")
+        hl_attn = hf_l.get("attn_out")
+        hb_res = hf_b.get("attn_residual")
+        hl_res = hf_l.get("attn_residual")
+        if all(x is not None for x in [eb_in, el_in, eb_attn, el_attn, eb_res, el_res, hb_in, hl_in, hb_attn, hl_attn, hb_res, hl_res]):
+            base_m = attn_residual_decomp(eb_in, eb_attn, eb_res, hb_in, hb_attn, hb_res)
+            lora_m = attn_residual_decomp(el_in, el_attn, el_res, hl_in, hl_attn, hl_res)
+            delta_m = attn_residual_decomp(
+                el_in - eb_in,
+                el_attn - eb_attn,
+                el_res - eb_res,
+                hl_in - hb_in,
+                hl_attn - hb_attn,
+                hl_res - hb_res,
+            )
+            decomp_rows.append(
+                {
+                    "layer": str(layer),
+                    "base_input_max": f"{base_m['input_max']:.8f}",
+                    "base_attn_max": f"{base_m['attn_max']:.8f}",
+                    "base_residual_max": f"{base_m['residual_max']:.8f}",
+                    "base_sum_max": f"{base_m['sum_max']:.8f}",
+                    "base_gap_max": f"{base_m['gap_max']:.8f}",
+                    "lora_input_max": f"{lora_m['input_max']:.8f}",
+                    "lora_attn_max": f"{lora_m['attn_max']:.8f}",
+                    "lora_residual_max": f"{lora_m['residual_max']:.8f}",
+                    "lora_sum_max": f"{lora_m['sum_max']:.8f}",
+                    "lora_gap_max": f"{lora_m['gap_max']:.8f}",
+                    "delta_input_max": f"{delta_m['input_max']:.8f}",
+                    "delta_attn_max": f"{delta_m['attn_max']:.8f}",
+                    "delta_residual_max": f"{delta_m['residual_max']:.8f}",
+                    "delta_sum_max": f"{delta_m['sum_max']:.8f}",
+                    "delta_gap_max": f"{delta_m['gap_max']:.8f}",
                 }
             )
 
@@ -480,8 +606,36 @@ def main() -> None:
         worst=worst,
     )
 
+    decomp_csv = out_dir / "stage31_attn_residual_decomp.csv"
+    if decomp_rows:
+        with decomp_csv.open("w", encoding="utf-8", newline="") as f:
+            fields = [
+                "layer",
+                "base_input_max",
+                "base_attn_max",
+                "base_residual_max",
+                "base_sum_max",
+                "base_gap_max",
+                "lora_input_max",
+                "lora_attn_max",
+                "lora_residual_max",
+                "lora_sum_max",
+                "lora_gap_max",
+                "delta_input_max",
+                "delta_attn_max",
+                "delta_residual_max",
+                "delta_sum_max",
+                "delta_gap_max",
+            ]
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for r in decomp_rows:
+                w.writerow(r)
+
     print(f"[done] out_dir={out_dir}")
     print(f"[done] csv={csv_path}")
+    if decomp_rows:
+        print(f"[done] decomp_csv={decomp_csv}")
     print(f"[done] md={md_path}")
     print(
         f"[done] worst layer={worst['layer']} block={worst['block']} "
