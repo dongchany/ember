@@ -227,6 +227,20 @@ target_link_libraries(ember_prefix_cache_benchmark PRIVATE
     ember_infer
 )
 
+add_executable(ember_multi_candidate_rollout
+    benchmarks/multi_candidate_rollout.cpp
+)
+target_link_libraries(ember_multi_candidate_rollout PRIVATE
+    ember_infer
+)
+
+add_executable(ember_cache_policy_sim
+    benchmarks/cache_policy_sim.cpp
+)
+target_link_libraries(ember_cache_policy_sim PRIVATE
+    ember_core
+)
+
 add_executable(ember_lora_hot_update_benchmark
     benchmarks/lora_hot_update_benchmark.cpp
 )

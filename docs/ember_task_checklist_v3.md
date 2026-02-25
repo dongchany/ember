@@ -128,20 +128,43 @@
 
 ### 3.2 批量多候选生成 + Logprobs
 
-- [ ] `generate(prompts, num_candidates, sampling_params)` 支持 N=4/8/16
+- [~] `generate(prompts, num_candidates, sampling_params)` 支持 N=4/8/16（当前 benchmark 路径已支持批量候选 rollout）
 - [ ] 支持 stop sequences
-- [ ] 导出 token-level logprobs
+- [x] 导出 token-level logprobs
 - [ ] 数值一致性校验
+
+**新增产出（2026-02-25）：**
+- `benchmarks/multi_candidate_rollout.cpp`
+- `scripts/report/run_stage2_multi_candidate.py`
+- `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_multi_candidate.csv`
+- `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_candidates.jsonl`
+- `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_summary.md`
+
+**当前可引用数字（smoke, 128/32, 4 candidates, 2x3080Ti split=9+27）：**
+- total_gen_tokens=`128`, total_ms=`1838.459`, gen_tok_s=`69.624`
+- token-level logprobs 已导出到 `stage21_candidates.jsonl`
 
 **解锁：** P1 多轮实验（100 prompt × 8 candidates）、P4 Best-of-N 基线
 
 ### 3.3 Cache Policy 接口 + 策略实现
 
-- [ ] 设计 `CachePolicy` 抽象接口
-- [ ] 实现 `Naive`（全失效）
-- [ ] 实现 `UpdateLocality(N)`（冻结前 N 层）
-- [ ] 实现 `PeriodicRefresh(k)`（每 k 步全刷新）
-- [ ] 每种策略的 stats 导出（命中率、失效率、重算量）
+- [~] 设计 `CachePolicy` 抽象接口（已落地 `runtime/cache_policy.h` 策略引擎）
+- [x] 实现 `Naive`（全失效）
+- [x] 实现 `UpdateLocality(N)`（冻结前 N 层）
+- [x] 实现 `PeriodicRefresh(k)`（每 k 步全刷新）
+- [~] 每种策略的 stats 导出（当前已导出每轮 `recompute/reuse/full_refresh` 与汇总 `avg_recompute_ratio`）
+
+**新增产出（2026-02-25）：**
+- `runtime/cache_policy.h`
+- `benchmarks/cache_policy_sim.cpp`
+- `scripts/report/run_stage33_cache_policy.py`
+- `reports/stage33_cache_policy_20260225_mainline/stage33_policy_summary.csv`
+- `reports/stage33_cache_policy_20260225_mainline/stage33_policy_per_round.csv`
+
+**当前可引用数字（num_layers=36, rounds=30, freeze_layers=18, k=10）：**
+- `naive`: avg_recompute_ratio=`1.000000`
+- `update_locality`: avg_recompute_ratio=`0.516667`
+- `periodic_refresh`: avg_recompute_ratio=`0.566667`
 
 **解锁：** 所有 P1 核心实验
 
