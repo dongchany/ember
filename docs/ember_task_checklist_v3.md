@@ -108,7 +108,7 @@
 
 - [x] 支持加载 PEFT 格式 LoRA（A/B 矩阵）
 - [x] 推理注入（merge 到投影权重）：`W <- W + scale * (B @ A)`
-- [~] 热替换（不重载 base model；当前为增量 merge 语义，adapter 间无回滚）
+- [x] 热替换（不重载 base model；支持 `replace_existing` 先回滚后应用）
 - [ ] 数值验证：和 HF PEFT 推理结果对齐（atol < 1e-4）
 - [x] 导出热更新延迟
 
@@ -117,21 +117,23 @@
 - `scripts/report/run_stage1_lora_hot_update.py`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline/stage31_summary.md`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline_avg/stage31_lora_hot_update.csv`
+- `reports/stage31_lora_hot_update_4b_20260225_replace_mainline/stage31_summary.md`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
-- 冷启动首轮（iters=1, warmup=0）：`352.837 ms`
-- 稳态（iters=3, warmup=1）：`25.654 ms`
-- 本次更新矩阵数：`144`（36 层 × q/k/v/o）
+- 冷启动首轮（iters=1, warmup=0）：`353.980 ms`
+- 稳态（iters=3, warmup=1）：`28.206 ms`
+- 热替换稳态（iters=3, warmup=1, replace_existing=1）：`51.538 ms`
+- 本次更新矩阵数：增量 merge `144`；热替换（回滚+应用）`288`
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
 ### 3.2 批量多候选生成 + Logprobs
 
-- [~] `generate(prompts, num_candidates, sampling_params)` 支持 N=4/8/16（当前 benchmark 路径已支持批量候选 rollout）
-- [ ] 支持 stop sequences
+- [x] `generate(prompts, num_candidates, sampling_params)` 支持 N=4/8/16（已实测 smoke：N=4/8/16）
+- [x] 支持 stop sequences
 - [x] 导出 token-level logprobs
-- [ ] 数值一致性校验
+- [x] 数值一致性校验（同 seed 重跑一致性）
 
 **新增产出（2026-02-25）：**
 - `benchmarks/multi_candidate_rollout.cpp`
@@ -139,20 +141,28 @@
 - `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_multi_candidate.csv`
 - `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_candidates.jsonl`
 - `reports/stage21_multi_candidate_4b_20260225_smoke/stage21_summary.md`
+- `reports/stage21_multi_candidate_4b_20260225_mainline/stage21_multi_candidate.csv`（N=8 主线配置）
+- `reports/stage21_multi_candidate_4b_20260225_n16_smoke/stage21_multi_candidate.csv`（N=16 验证）
+- `reports/stage21_multi_candidate_4b_20260225_stopseq_smoke/stage21_candidates.jsonl`（`finish_reason=stop_seq` 验证）
+- `scripts/report/run_stage2_numeric_consistency.py`
+- `reports/stage22_numeric_consistency_4b_20260225_mainline/stage22_numeric_consistency.csv`
 
-**当前可引用数字（smoke, 128/32, 4 candidates, 2x3080Ti split=9+27）：**
-- total_gen_tokens=`128`, total_ms=`1838.459`, gen_tok_s=`69.624`
+**当前可引用数字：**
+- smoke (128/32, N=4): total_gen_tokens=`128`, total_ms=`1838.459`, gen_tok_s=`69.624`
+- smoke (128/32, N=16): total_gen_tokens=`512`, total_ms=`4798.022`, gen_tok_s=`106.711`
+- mainline (2048/128, N=8): total_gen_tokens=`1024`, total_ms=`14028.646`, gen_tok_s=`72.994`
 - token-level logprobs 已导出到 `stage21_candidates.jsonl`
+- numeric consistency: same-seed 重跑 `token_mismatch_candidates=0`, `max_abs_logprob_diff=0.0`
 
 **解锁：** P1 多轮实验（100 prompt × 8 candidates）、P4 Best-of-N 基线
 
 ### 3.3 Cache Policy 接口 + 策略实现
 
-- [~] 设计 `CachePolicy` 抽象接口（已落地 `runtime/cache_policy.h` 策略引擎）
+- [x] 设计 `CachePolicy` 抽象接口（已落地 `runtime/cache_policy.h` 策略引擎）
 - [x] 实现 `Naive`（全失效）
 - [x] 实现 `UpdateLocality(N)`（冻结前 N 层）
 - [x] 实现 `PeriodicRefresh(k)`（每 k 步全刷新）
-- [~] 每种策略的 stats 导出（当前已导出每轮 `recompute/reuse/full_refresh` 与汇总 `avg_recompute_ratio`）
+- [x] 每种策略的 stats 导出（已导出每轮 `recompute/reuse/full_refresh` 与汇总 `hit/miss/recompute`）
 
 **新增产出（2026-02-25）：**
 - `runtime/cache_policy.h`
@@ -187,10 +197,12 @@
 - `reports/stage14_cumulative_profile_4b_20260225_mainline/stage14_per_round.csv`
 - `reports/stage14_cumulative_profile_4b_20260225_mainline/stage14_summary.md`
 - `reports/stage14_cumulative_profile_4b_4096_20260225_mainline/stage14_summary.md`
+- `reports/stage14_cumulative_profile_4b_20260225_policy_mainline/stage14_summary.md`
+- `reports/stage14_cumulative_profile_4b_4096_20260225_policy_mainline/stage14_summary.md`
 
 **当前可引用数字（30 轮，100 prompts × 8 candidates，2 GPUs）：**
-- 2048/128: Prefix-only 相对 Naive 累积 GPU-hours 降 `7.441%`
-- 4096/64: Prefix-only 相对 Naive 累积 GPU-hours 降 `15.591%`
+- 2048/128（policy-per-round=update_locality）: Prefix-only 相对 Naive 降 `7.275%`；UpdateLocality 降 `7.489%`
+- 4096/64（base-profile-csv + policy-per-round=update_locality）: Prefix-only 相对 Naive 降 `15.538%`；UpdateLocality 降 `21.938%`
 
 ### 4.2 Update Locality N Sweep（P1 Fig 4 — 关键 ablation）
 

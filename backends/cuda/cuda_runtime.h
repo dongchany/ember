@@ -119,8 +119,11 @@ public:
 
     // Merge a PEFT LoRA adapter into current attention projection weights in-place.
     // Supported targets: self_attn.{q_proj,k_proj,v_proj,o_proj}.
+    // When replace_existing=true and a previous adapter was merged with this API,
+    // it is first unmerged before the new adapter is applied.
     Error apply_lora_adapter(const std::string& adapter_dir,
                              float scale = 1.0f,
+                             bool replace_existing = false,
                              LoraApplyStats* stats = nullptr);
     
     MemoryEstimate estimate_memory(const ModelConfig& config, 
@@ -238,6 +241,11 @@ private:
     
     // CUDA streams（每个设备一个）
     std::vector<cudaStream_t> streams_;
+
+    // Last adapter state for optional replace semantics.
+    bool has_active_lora_adapter_ = false;
+    std::string active_lora_adapter_dir_;
+    float active_lora_scale_ = 0.0f;
     std::vector<cudaStream_t> transfer_streams_;
 
     // Per-layer timing profile (ms) for the most recent prefill/decode call.

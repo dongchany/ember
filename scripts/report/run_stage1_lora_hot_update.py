@@ -125,6 +125,7 @@ def write_summary_md(path: Path, model_dir: Path, adapter_dir: Path, row: Dict[s
     lines.append(f"| gpus | `{row.get('gpus','')}` |")
     lines.append(f"| split | `{row.get('split','')}` |")
     lines.append(f"| scale | `{row.get('scale','')}` |")
+    lines.append(f"| replace_existing | `{row.get('replace_existing','')}` |")
     lines.append(f"| effective_scale | `{row.get('effective_scale','')}` |")
     lines.append(f"| updated_matrices | `{row.get('updated_matrices','')}` |")
     lines.append(f"| skipped_matrices | `{row.get('skipped_matrices','')}` |")
@@ -165,6 +166,7 @@ def main() -> None:
     ap.add_argument("--gpus", type=str, default="0,1")
     ap.add_argument("--split", type=str, default="9,27")
     ap.add_argument("--scale", type=float, default=1.0)
+    ap.add_argument("--replace-existing", action="store_true", default=False)
     ap.add_argument("--iters", type=int, default=1)
     ap.add_argument("--warmup", type=int, default=0)
     ap.add_argument("--build-dir", type=str, default="build")
@@ -215,6 +217,8 @@ def main() -> None:
         "--csv",
         str(csv_path),
     ]
+    if args.replace_existing:
+        cmd.append("--replace-existing")
 
     p = run_cmd(cmd, cwd=repo, log_path=logs_dir / "run.log")
     if p.returncode != 0:
@@ -238,4 +242,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

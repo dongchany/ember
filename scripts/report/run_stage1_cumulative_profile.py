@@ -58,6 +58,26 @@ def find_stage12_row(
     raise AssertionError("unreachable")
 
 
+def find_base_profile_row(
+    rows: List[Dict[str, str]],
+    mode: str,
+    prompt_len: int,
+    decode_steps: int,
+) -> Dict[str, str]:
+    for r in rows:
+        if (
+            r.get("mode", "") == mode
+            and int(r.get("prompt_len", "0")) == prompt_len
+            and int(r.get("decode_steps", "0")) == decode_steps
+        ):
+            return r
+    die(
+        "failed to find base profile row for "
+        f"mode={mode}, prompt_len={prompt_len}, decode_steps={decode_steps}"
+    )
+    raise AssertionError("unreachable")
+
+
 def find_prefix_row(rows: List[Dict[str, str]], prefix_len: int) -> Optional[Dict[str, str]]:
     for r in rows:
         if int(r.get("prefix_len", "0")) == prefix_len:
@@ -98,9 +118,44 @@ def per_round_ms_update_locality(
     return float(n_requests) * (prefill_this_round + decode_total_ms)
 
 
+def load_policy_ratios_by_round(
+    policy_per_round_path: Path,
+    policy_name: str,
+    num_rounds: int,
+) -> Dict[int, float]:
+    rows = read_csv(policy_per_round_path)
+    ratios: Dict[int, float] = {}
+    for r in rows:
+        if r.get("policy", "") != policy_name:
+            continue
+        try:
+            rnd = int(r.get("round", "0"))
+        except Exception:
+            continue
+        if rnd <= 0:
+            continue
+        ratios[rnd] = safe_float(r.get("recompute_ratio", "1.0"), 1.0)
+    if not ratios:
+        die(f"no rows for policy='{policy_name}' in {policy_per_round_path}")
+    missing = [str(i) for i in range(1, num_rounds + 1) if i not in ratios]
+    if missing:
+        die(
+            f"policy='{policy_name}' missing rounds in {policy_per_round_path}: "
+            + ",".join(missing[:10])
+            + ("..." if len(missing) > 10 else "")
+        )
+    return ratios
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Stage 1.4 cumulative rollout cost simulation.")
-    ap.add_argument("--stage12-summary", type=str, required=True, help="stage12_split_summary.csv")
+    ap.add_argument("--stage12-summary", type=str, default="", help="stage12_split_summary.csv")
+    ap.add_argument(
+        "--base-profile-csv",
+        type=str,
+        default="",
+        help="optional p1_fig2_prefill_share.csv; bypasses stage12 row lookup",
+    )
     ap.add_argument("--split", type=str, default="9+27")
     ap.add_argument("--mode", type=str, default="overlap", choices=["overlap", "no_overlap"])
     ap.add_argument("--prompt-len", type=int, default=2048)
@@ -113,6 +168,8 @@ def main() -> None:
     ap.add_argument("--prefix-len", type=int, default=1024)
     ap.add_argument("--locality-recompute-ratio", type=float, default=0.5, help="0.5 means keep 50% prefill compute")
     ap.add_argument("--periodic-refresh-k", type=int, default=0, help="0 disables periodic full refresh")
+    ap.add_argument("--policy-per-round", type=str, default="", help="optional stage33_policy_per_round.csv")
+    ap.add_argument("--policy-name", type=str, default="update_locality", help="policy name in stage33 per-round csv")
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
 
@@ -129,20 +186,38 @@ def main() -> None:
     if args.periodic_refresh_k < 0:
         die("--periodic-refresh-k must be >= 0")
 
-    stage12_path = Path(args.stage12_summary).expanduser().resolve()
-    if not stage12_path.exists():
-        die(f"missing stage12 summary: {stage12_path}")
-
-    stage12_rows = read_csv(stage12_path)
-    row = find_stage12_row(
-        rows=stage12_rows,
-        split=args.split,
-        mode=args.mode,
-        prompt_len=args.prompt_len,
-        decode_steps=args.decode_steps,
-    )
-    prefill_full_ms = safe_float(row.get("prefill_wall_ms", "0"))
-    decode_per_token_ms = safe_float(row.get("decode_per_token_ms", "0"))
+    source_note = ""
+    if args.base_profile_csv.strip():
+        base_path = Path(args.base_profile_csv).expanduser().resolve()
+        if not base_path.exists():
+            die(f"missing base profile csv: {base_path}")
+        base_rows = read_csv(base_path)
+        row = find_base_profile_row(
+            rows=base_rows,
+            mode=args.mode,
+            prompt_len=args.prompt_len,
+            decode_steps=args.decode_steps,
+        )
+        prefill_full_ms = safe_float(row.get("prefill_wall_ms", "0"))
+        decode_per_token_ms = safe_float(row.get("decode_per_token_ms", "0"))
+        source_note = f"base timing from {base_path.name} (mode={args.mode})"
+    else:
+        if not args.stage12_summary.strip():
+            die("either --stage12-summary or --base-profile-csv must be provided")
+        stage12_path = Path(args.stage12_summary).expanduser().resolve()
+        if not stage12_path.exists():
+            die(f"missing stage12 summary: {stage12_path}")
+        stage12_rows = read_csv(stage12_path)
+        row = find_stage12_row(
+            rows=stage12_rows,
+            split=args.split,
+            mode=args.mode,
+            prompt_len=args.prompt_len,
+            decode_steps=args.decode_steps,
+        )
+        prefill_full_ms = safe_float(row.get("prefill_wall_ms", "0"))
+        decode_per_token_ms = safe_float(row.get("decode_per_token_ms", "0"))
+        source_note = f"base timing from {stage12_path.name} (split={args.split}, mode={args.mode})"
     decode_total_ms = decode_per_token_ms * float(args.decode_steps)
 
     prefix_once_ms = 0.0
@@ -168,6 +243,19 @@ def main() -> None:
         )
 
     n_requests = args.num_prompts * args.num_candidates
+    per_round_ratio_override: Dict[int, float] = {}
+    policy_note = "locality ratio from --locality-recompute-ratio + --periodic-refresh-k"
+    if args.policy_per_round.strip():
+        policy_path = Path(args.policy_per_round).expanduser().resolve()
+        if not policy_path.exists():
+            die(f"missing --policy-per-round: {policy_path}")
+        per_round_ratio_override = load_policy_ratios_by_round(
+            policy_per_round_path=policy_path,
+            policy_name=args.policy_name,
+            num_rounds=args.num_rounds,
+        )
+        policy_note = f"locality ratio from {policy_path.name} policy={args.policy_name}"
+
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else (Path.cwd() / "reports" / f"stage14_cumulative_profile_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -177,14 +265,18 @@ def main() -> None:
     for rnd in range(1, args.num_rounds + 1):
         naive_ms = per_round_ms_naive(n_requests, prefill_full_ms, decode_total_ms)
         prefix_ms = per_round_ms_prefix_only(n_requests, prefix_once_ms, suffix_per_req_ms, decode_total_ms)
-        locality_ms = per_round_ms_update_locality(
-            n_requests=n_requests,
-            prefill_full_ms=prefill_full_ms,
-            decode_total_ms=decode_total_ms,
-            locality_recompute_ratio=args.locality_recompute_ratio,
-            round_idx_1based=rnd,
-            periodic_refresh_k=args.periodic_refresh_k,
-        )
+        if per_round_ratio_override:
+            ratio = per_round_ratio_override[rnd]
+            locality_ms = float(n_requests) * (prefill_full_ms * ratio + decode_total_ms)
+        else:
+            locality_ms = per_round_ms_update_locality(
+                n_requests=n_requests,
+                prefill_full_ms=prefill_full_ms,
+                decode_total_ms=decode_total_ms,
+                locality_recompute_ratio=args.locality_recompute_ratio,
+                round_idx_1based=rnd,
+                periodic_refresh_k=args.periodic_refresh_k,
+            )
         cumulative["naive"] += naive_ms
         cumulative["prefix_only"] += prefix_ms
         cumulative["update_locality"] += locality_ms
@@ -256,9 +348,11 @@ def main() -> None:
         "",
         f"- Generated at: `{dt.datetime.now().isoformat(timespec='seconds')}`",
         f"- Base row: split={args.split}, mode={args.mode}, prompt_len={args.prompt_len}, decode_steps={args.decode_steps}",
+        f"- Base timing source: {source_note}",
         f"- Requests per round: num_prompts={args.num_prompts}, num_candidates={args.num_candidates}, total={n_requests}",
         f"- Locality assumptions: recompute_ratio={args.locality_recompute_ratio}, periodic_refresh_k={args.periodic_refresh_k}",
         f"- Prefix assumptions: {prefix_note}",
+        f"- Policy assumptions: {policy_note}",
         "",
         "| strategy | cumulative_ms | cumulative_wall_hours | cumulative_gpu_hours | reduction_vs_naive_% |",
         "| --- | --- | --- | --- | --- |",

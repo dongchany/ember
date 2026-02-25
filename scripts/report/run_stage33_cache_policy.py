@@ -142,6 +142,10 @@ def main() -> None:
                 "full_refreshes": str(refreshes),
                 "avg_recompute_ratio": f"{avg_ratio:.6f}",
                 "avg_reused_ratio": f"{(1.0 - avg_ratio):.6f}",
+                "cache_hit_rate_proxy": f"{(1.0 - avg_ratio):.6f}",
+                "cache_miss_rate_proxy": f"{avg_ratio:.6f}",
+                "recompute_layers_total": str(sum(safe_int(r.get("recompute_layers", "0")) for r in rows)),
+                "reused_layers_total": str(sum(safe_int(r.get("reused_layers", "0")) for r in rows)),
             }
         )
 
@@ -159,12 +163,13 @@ def main() -> None:
         f"- Generated at: `{dt.datetime.now().isoformat(timespec='seconds')}`",
         f"- num_layers={args.num_layers}, rounds={args.rounds}, freeze_layers={args.freeze_layers}, periodic_refresh_k={args.periodic_refresh_k}",
         "",
-        "| policy | full_refreshes | avg_recompute_ratio | avg_reused_ratio |",
-        "| --- | --- | --- | --- |",
+        "| policy | full_refreshes | avg_recompute_ratio | cache_hit_rate_proxy | cache_miss_rate_proxy | recompute_layers_total |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for r in summary_rows:
         lines.append(
-            f"| {r['policy']} | {r['full_refreshes']} | {r['avg_recompute_ratio']} | {r['avg_reused_ratio']} |"
+            f"| {r['policy']} | {r['full_refreshes']} | {r['avg_recompute_ratio']} | "
+            f"{r['cache_hit_rate_proxy']} | {r['cache_miss_rate_proxy']} | {r['recompute_layers_total']} |"
         )
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -179,7 +184,8 @@ def main() -> None:
     for r in summary_rows:
         p1_lines.append(
             f"- {r['policy']}: avg_recompute_ratio={r['avg_recompute_ratio']}, "
-            f"avg_reused_ratio={r['avg_reused_ratio']}, full_refreshes={r['full_refreshes']}"
+            f"cache_hit_rate_proxy={r['cache_hit_rate_proxy']}, cache_miss_rate_proxy={r['cache_miss_rate_proxy']}, "
+            f"recompute_layers_total={r['recompute_layers_total']}, full_refreshes={r['full_refreshes']}"
         )
     p1_lines += [
         "",
@@ -196,4 +202,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

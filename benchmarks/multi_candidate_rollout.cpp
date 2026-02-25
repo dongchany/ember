@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -81,7 +82,8 @@ std::string json_escape(const std::string& s) {
 bool write_candidates_jsonl(const std::filesystem::path& path,
                             const std::vector<std::vector<int>>& tokens,
                             const std::vector<std::vector<float>>& token_logprobs,
-                            const std::vector<std::string>& texts) {
+                            const std::vector<std::string>& texts,
+                            const std::vector<std::string>& finish_reasons) {
     std::ofstream out(path);
     if (!out.is_open()) return false;
 
@@ -96,6 +98,9 @@ bool write_candidates_jsonl(const std::filesystem::path& path,
         out << "\"num_tokens\":" << t.size() << ",";
         out << "\"sum_logprob\":" << std::fixed << std::setprecision(6) << sum_lp << ",";
         out << "\"avg_logprob\":" << std::fixed << std::setprecision(6) << avg_lp << ",";
+        out << "\"finish_reason\":\""
+            << json_escape(i < finish_reasons.size() ? finish_reasons[i] : std::string("unknown"))
+            << "\",";
 
         out << "\"tokens\":[";
         for (size_t j = 0; j < t.size(); ++j) {
@@ -125,6 +130,25 @@ std::vector<int> sample_random_prompt(int prompt_len, int vocab_size, int seed) 
     return tokens;
 }
 
+bool has_suffix(const std::vector<int>& seq, const std::vector<int>& pattern) {
+    if (pattern.empty() || seq.size() < pattern.size()) return false;
+    const size_t off = seq.size() - pattern.size();
+    for (size_t i = 0; i < pattern.size(); ++i) {
+        if (seq[off + i] != pattern[i]) return false;
+    }
+    return true;
+}
+
+int find_matching_stop_seq(const std::vector<int>& generated,
+                           const std::vector<std::vector<int>>& stop_seqs) {
+    for (size_t i = 0; i < stop_seqs.size(); ++i) {
+        if (has_suffix(generated, stop_seqs[i])) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -144,6 +168,8 @@ int main(int argc, char** argv) {
     float presence_penalty = 0.0f;
     float frequency_penalty = 0.0f;
     int no_repeat_ngram_size = 0;
+    std::vector<std::string> stop_seq_texts;
+    bool strip_stop = true;
     int seed = 1234;
     bool decode_text = true;
     std::string csv_path;
@@ -178,6 +204,8 @@ int main(int argc, char** argv) {
                 << "  --presence-penalty F  (default: 0.0)\n"
                 << "  --frequency-penalty F (default: 0.0)\n"
                 << "  --no-repeat-ngram-size N (default: 0)\n"
+                << "  --stop-seq TEXT       stop sequence string (repeatable)\n"
+                << "  --no-strip-stop       keep stop sequence tokens in output\n"
                 << "  --seed N              RNG seed (default: 1234)\n"
                 << "  --no-decode-text      skip candidate text decode\n"
                 << "  --csv PATH            write summary CSV row\n"
@@ -217,6 +245,10 @@ int main(int argc, char** argv) {
             frequency_penalty = std::stof(need("--frequency-penalty"));
         } else if (arg == "--no-repeat-ngram-size") {
             no_repeat_ngram_size = std::stoi(need("--no-repeat-ngram-size"));
+        } else if (arg == "--stop-seq") {
+            stop_seq_texts.push_back(need("--stop-seq"));
+        } else if (arg == "--no-strip-stop") {
+            strip_stop = false;
         } else if (arg == "--seed") {
             seed = std::stoi(need("--seed"));
         } else if (arg == "--no-decode-text") {
@@ -259,6 +291,20 @@ int main(int argc, char** argv) {
     }
     if (prompt_tokens.empty()) die("empty prompt tokens");
     prompt_len = static_cast<int>(prompt_tokens.size());
+
+    std::vector<std::vector<int>> stop_seq_tokens;
+    if (!stop_seq_texts.empty()) {
+        if (!tokenizer_ok) {
+            die("tokenizer load failed; --stop-seq requires tokenizer");
+        }
+        for (const std::string& s : stop_seq_texts) {
+            if (s.empty()) continue;
+            std::vector<int> ids = tokenizer.encode(s, /*add_special_tokens=*/false);
+            if (!ids.empty()) {
+                stop_seq_tokens.push_back(std::move(ids));
+            }
+        }
+    }
 
     auto runtime = ember::RuntimeFactory::create_cuda();
     if (!runtime || !runtime->available()) die("CUDA runtime not available");
@@ -309,6 +355,7 @@ int main(int argc, char** argv) {
     std::vector<std::vector<int>> histories(static_cast<size_t>(num_candidates), prompt_tokens);
     std::vector<int> last_tokens(static_cast<size_t>(num_candidates), 0);
     std::vector<bool> finished(static_cast<size_t>(num_candidates), false);
+    std::vector<std::string> finish_reasons(static_cast<size_t>(num_candidates), "max_len");
 
     const int eos_id = tokenizer_ok ? tokenizer.eos_token_id() : -1;
 
@@ -333,6 +380,21 @@ int main(int argc, char** argv) {
         last_tokens[static_cast<size_t>(slot)] = tok;
         if (eos_id >= 0 && tok == eos_id) {
             finished[static_cast<size_t>(slot)] = true;
+            finish_reasons[static_cast<size_t>(slot)] = "eos";
+            setup.session.set_inactive(slot);
+            continue;
+        }
+        const int stop_idx = find_matching_stop_seq(generated[static_cast<size_t>(slot)], stop_seq_tokens);
+        if (stop_idx >= 0) {
+            if (strip_stop) {
+                const size_t n = stop_seq_tokens[static_cast<size_t>(stop_idx)].size();
+                if (n > 0 && n <= generated[static_cast<size_t>(slot)].size()) {
+                    generated[static_cast<size_t>(slot)].resize(generated[static_cast<size_t>(slot)].size() - n);
+                    token_logprobs[static_cast<size_t>(slot)].resize(token_logprobs[static_cast<size_t>(slot)].size() - n);
+                }
+            }
+            finished[static_cast<size_t>(slot)] = true;
+            finish_reasons[static_cast<size_t>(slot)] = "stop_seq";
             setup.session.set_inactive(slot);
         }
     }
@@ -373,6 +435,21 @@ int main(int argc, char** argv) {
             last_tokens[static_cast<size_t>(slot)] = tok;
             if (eos_id >= 0 && tok == eos_id) {
                 finished[static_cast<size_t>(slot)] = true;
+                finish_reasons[static_cast<size_t>(slot)] = "eos";
+                setup.session.set_inactive(slot);
+                continue;
+            }
+            const int stop_idx = find_matching_stop_seq(generated[static_cast<size_t>(slot)], stop_seq_tokens);
+            if (stop_idx >= 0) {
+                if (strip_stop) {
+                    const size_t n = stop_seq_tokens[static_cast<size_t>(stop_idx)].size();
+                    if (n > 0 && n <= generated[static_cast<size_t>(slot)].size()) {
+                        generated[static_cast<size_t>(slot)].resize(generated[static_cast<size_t>(slot)].size() - n);
+                        token_logprobs[static_cast<size_t>(slot)].resize(token_logprobs[static_cast<size_t>(slot)].size() - n);
+                    }
+                }
+                finished[static_cast<size_t>(slot)] = true;
+                finish_reasons[static_cast<size_t>(slot)] = "stop_seq";
                 setup.session.set_inactive(slot);
             }
         }
@@ -393,7 +470,7 @@ int main(int argc, char** argv) {
     }
 
     if (!candidates_jsonl_path.empty()) {
-        if (!write_candidates_jsonl(candidates_jsonl_path, generated, token_logprobs, decoded_texts)) {
+        if (!write_candidates_jsonl(candidates_jsonl_path, generated, token_logprobs, decoded_texts, finish_reasons)) {
             die("failed to write candidates jsonl: " + candidates_jsonl_path);
         }
     }
@@ -413,11 +490,12 @@ int main(int argc, char** argv) {
         << gen_tok_s << ","
         << temperature << ","
         << top_p << ","
-        << top_k;
+        << top_k << ","
+        << stop_seq_tokens.size();
 
     const std::string header =
         "mode,prompt_len,gen_len,num_candidates,gpus,split,prefill_ms,decode_ms,total_ms,total_gen_tokens,gen_tok_s,"
-        "temperature,top_p,top_k";
+        "temperature,top_p,top_k,num_stop_sequences";
 
     if (!csv_path.empty()) {
         std::ofstream out(csv_path);
@@ -429,4 +507,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-

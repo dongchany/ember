@@ -779,6 +779,7 @@ Error CudaRuntime::load_layer_weights(int layer_idx, ModelWeightLoader& loader, 
 
 Error CudaRuntime::apply_lora_adapter(const std::string& adapter_dir,
                                       float scale,
+                                      bool replace_existing,
                                       LoraApplyStats* stats) {
     if (!loaded_) {
         return Error(ErrorCode::MODEL_NOT_LOADED, "Model not loaded");
@@ -790,204 +791,243 @@ Error CudaRuntime::apply_lora_adapter(const std::string& adapter_dir,
         return Error(ErrorCode::INVALID_FORMAT, "LoRA apply supports F16/BF16 weights only");
     }
 
-    LoraApplyStats local_stats{};
-    auto t0 = std::chrono::high_resolution_clock::now();
+    auto apply_one = [&](const std::string& one_adapter_dir,
+                         float one_scale,
+                         bool print_log,
+                         LoraApplyStats* out_stats) -> Error {
+        LoraApplyStats local_stats{};
+        auto t0 = std::chrono::high_resolution_clock::now();
 
-    ModelWeightLoader loader;
-    Error err = loader.open(adapter_dir);
-    if (err) return err;
+        ModelWeightLoader loader;
+        Error err = loader.open(one_adapter_dir);
+        if (err) return err;
 
-    struct ABPair {
-        std::string a_name;
-        std::string b_name;
-    };
-    std::unordered_map<std::string, ABPair> pairs;
-    const std::vector<std::string> names = loader.tensor_names();
-    for (const std::string& name : names) {
-        LoraTargetKey key;
-        if (!parse_lora_target_key(name, key)) continue;
-        const std::string pair_key = std::to_string(key.layer_idx) + ":" + key.proj;
-        auto& p = pairs[pair_key];
-        if (key.is_a) {
-            p.a_name = name;
-        } else {
-            p.b_name = name;
+        struct ABPair {
+            std::string a_name;
+            std::string b_name;
+        };
+        std::unordered_map<std::string, ABPair> pairs;
+        const std::vector<std::string> names = loader.tensor_names();
+        for (const std::string& name : names) {
+            LoraTargetKey key;
+            if (!parse_lora_target_key(name, key)) continue;
+            const std::string pair_key = std::to_string(key.layer_idx) + ":" + key.proj;
+            auto& p = pairs[pair_key];
+            if (key.is_a) {
+                p.a_name = name;
+            } else {
+                p.b_name = name;
+            }
         }
-    }
-    if (pairs.empty()) {
-        return Error(ErrorCode::WEIGHT_NOT_FOUND,
-                     "No supported LoRA tensors found under " + adapter_dir);
-    }
-
-    const float alpha_over_r = read_lora_alpha_over_r(adapter_dir);
-    const float effective_scale = scale * alpha_over_r;
-    local_stats.scale_used = effective_scale;
-
-    const cudaDataType_t cuda_dtype = to_cuda_dtype(weights_.dtype);
-
-    auto pick_target = [&](int layer_idx, const std::string& proj, void** weight_ptr,
-                           int* out_dim, int* in_dim, int* device_id) -> Error {
-        if (layer_idx < 0 || layer_idx >= config_.num_layers) {
-            return Error(ErrorCode::INVALID_ARGUMENT,
-                         "LoRA layer index out of range: " + std::to_string(layer_idx));
-        }
-        auto& layer = weights_.layers[static_cast<size_t>(layer_idx)];
-        *device_id = layer.device_id;
-        if (proj == "q_proj") {
-            *weight_ptr = layer.q_proj_weight;
-            *out_dim = config_.num_heads * config_.head_dim;
-            *in_dim = config_.hidden_size;
-        } else if (proj == "k_proj") {
-            *weight_ptr = layer.k_proj_weight;
-            *out_dim = config_.num_kv_heads * config_.head_dim;
-            *in_dim = config_.hidden_size;
-        } else if (proj == "v_proj") {
-            *weight_ptr = layer.v_proj_weight;
-            *out_dim = config_.num_kv_heads * config_.head_dim;
-            *in_dim = config_.hidden_size;
-        } else if (proj == "o_proj") {
-            *weight_ptr = layer.o_proj_weight;
-            *out_dim = config_.hidden_size;
-            *in_dim = config_.num_heads * config_.head_dim;
-        } else {
-            return Error(ErrorCode::INVALID_ARGUMENT, "Unsupported LoRA target: " + proj);
-        }
-        if (*weight_ptr == nullptr) {
+        if (pairs.empty()) {
             return Error(ErrorCode::WEIGHT_NOT_FOUND,
-                         "Target weight not allocated for layer " + std::to_string(layer_idx) +
-                         " proj " + proj);
+                         "No supported LoRA tensors found under " + one_adapter_dir);
+        }
+
+        const float alpha_over_r = read_lora_alpha_over_r(one_adapter_dir);
+        const float effective_scale = one_scale * alpha_over_r;
+        local_stats.scale_used = effective_scale;
+
+        const cudaDataType_t cuda_dtype = to_cuda_dtype(weights_.dtype);
+
+        auto pick_target = [&](int layer_idx, const std::string& proj, void** weight_ptr,
+                               int* out_dim, int* in_dim, int* device_id) -> Error {
+            if (layer_idx < 0 || layer_idx >= config_.num_layers) {
+                return Error(ErrorCode::INVALID_ARGUMENT,
+                             "LoRA layer index out of range: " + std::to_string(layer_idx));
+            }
+            auto& layer = weights_.layers[static_cast<size_t>(layer_idx)];
+            *device_id = layer.device_id;
+            if (proj == "q_proj") {
+                *weight_ptr = layer.q_proj_weight;
+                *out_dim = config_.num_heads * config_.head_dim;
+                *in_dim = config_.hidden_size;
+            } else if (proj == "k_proj") {
+                *weight_ptr = layer.k_proj_weight;
+                *out_dim = config_.num_kv_heads * config_.head_dim;
+                *in_dim = config_.hidden_size;
+            } else if (proj == "v_proj") {
+                *weight_ptr = layer.v_proj_weight;
+                *out_dim = config_.num_kv_heads * config_.head_dim;
+                *in_dim = config_.hidden_size;
+            } else if (proj == "o_proj") {
+                *weight_ptr = layer.o_proj_weight;
+                *out_dim = config_.hidden_size;
+                *in_dim = config_.num_heads * config_.head_dim;
+            } else {
+                return Error(ErrorCode::INVALID_ARGUMENT, "Unsupported LoRA target: " + proj);
+            }
+            if (*weight_ptr == nullptr) {
+                return Error(ErrorCode::WEIGHT_NOT_FOUND,
+                             "Target weight not allocated for layer " + std::to_string(layer_idx) +
+                             " proj " + proj);
+            }
+            return Error::success();
+        };
+
+        for (const auto& kv : pairs) {
+            const ABPair& p = kv.second;
+            if (p.a_name.empty() || p.b_name.empty()) {
+                local_stats.skipped_matrices++;
+                continue;
+            }
+
+            LoraTargetKey key{};
+            if (!parse_lora_target_key(p.a_name, key)) {
+                local_stats.skipped_matrices++;
+                continue;
+            }
+
+            const SafetensorsMeta* a_meta = loader.get_meta(p.a_name);
+            const SafetensorsMeta* b_meta = loader.get_meta(p.b_name);
+            if (!a_meta || !b_meta || a_meta->shape.size() != 2 || b_meta->shape.size() != 2) {
+                return Error(ErrorCode::SHAPE_MISMATCH,
+                             "Invalid LoRA tensor shape for pair: " + p.a_name + " / " + p.b_name);
+            }
+
+            void* weight_ptr = nullptr;
+            int out_dim = 0;
+            int in_dim = 0;
+            int device_id = 0;
+            EMBER_RETURN_IF_ERROR(
+                pick_target(key.layer_idx, key.proj, &weight_ptr, &out_dim, &in_dim, &device_id));
+
+            const int r = static_cast<int>(a_meta->shape[0]);
+            const int a_in = static_cast<int>(a_meta->shape[1]);
+            const int b_out = static_cast<int>(b_meta->shape[0]);
+            const int b_r = static_cast<int>(b_meta->shape[1]);
+            if (r <= 0 || a_in <= 0 || b_out <= 0 || b_r <= 0) {
+                return Error(ErrorCode::SHAPE_MISMATCH,
+                             "Non-positive LoRA dimensions for pair: " + p.a_name + " / " + p.b_name);
+            }
+            if (a_in != in_dim || b_out != out_dim || b_r != r) {
+                return Error(ErrorCode::SHAPE_MISMATCH,
+                             "LoRA shape mismatch at layer " + std::to_string(key.layer_idx) +
+                             " proj " + key.proj +
+                             " (A=[" + std::to_string(r) + "," + std::to_string(a_in) + "]"
+                             ", B=[" + std::to_string(b_out) + "," + std::to_string(b_r) + "]"
+                             ", expected out=" + std::to_string(out_dim) +
+                             ", in=" + std::to_string(in_dim) + ")");
+            }
+
+            void* d_a = nullptr;
+            void* d_b = nullptr;
+            auto cleanup = [&]() {
+                cuda_free(d_a);
+                cuda_free(d_b);
+                d_a = nullptr;
+                d_b = nullptr;
+            };
+
+            err = load_tensor_to_device(loader, p.a_name, device_id, weights_.dtype, &d_a);
+            if (err) {
+                cleanup();
+                return err;
+            }
+            err = load_tensor_to_device(loader, p.b_name, device_id, weights_.dtype, &d_b);
+            if (err) {
+                cleanup();
+                return err;
+            }
+
+            cudaError_t cu_err = cudaSetDevice(device_id);
+            if (cu_err != cudaSuccess) {
+                cleanup();
+                return Error::cuda_error(std::string("cudaSetDevice failed: ") + cudaGetErrorString(cu_err));
+            }
+
+            cublasHandle_t handle = cublas_handles_[static_cast<size_t>(device_id)].get();
+            cudaStream_t stream = streams_[static_cast<size_t>(device_id)];
+
+            cublasStatus_t cb = cublasSetStream(handle, stream);
+            if (cb != CUBLAS_STATUS_SUCCESS) {
+                cleanup();
+                return Error::cuda_error("cublasSetStream failed: " + std::to_string(static_cast<int>(cb)));
+            }
+
+            // Row-major update:
+            //   W_row[out, in] += scale * (B_row[out, r] @ A_row[r, in])
+            // Compute through column-major view:
+            //   W_col[in, out] += scale * (A_col[in, r] @ B_col[r, out])
+            const float alpha = effective_scale;
+            const float beta = 1.0f;
+            cb = cublasGemmEx(
+                handle,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                in_dim, out_dim, r,
+                &alpha,
+                d_a, cuda_dtype, in_dim,
+                d_b, cuda_dtype, r,
+                &beta,
+                weight_ptr, cuda_dtype, in_dim,
+                CUBLAS_COMPUTE_32F,
+                CUBLAS_GEMM_DEFAULT_TENSOR_OP
+            );
+            if (cb != CUBLAS_STATUS_SUCCESS) {
+                cleanup();
+                return Error::cuda_error(
+                    "cublasGemmEx (LoRA merge) failed: " + std::to_string(static_cast<int>(cb)));
+            }
+
+            cu_err = cudaStreamSynchronize(stream);
+            if (cu_err != cudaSuccess) {
+                cleanup();
+                return Error::cuda_error(
+                    std::string("cudaStreamSynchronize failed: ") + cudaGetErrorString(cu_err));
+            }
+
+            cleanup();
+            local_stats.updated_matrices++;
+        }
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+        local_stats.wall_ms = static_cast<float>(
+            std::chrono::duration<double, std::milli>(t1 - t0).count());
+
+        if (local_stats.updated_matrices <= 0) {
+            return Error(ErrorCode::WEIGHT_NOT_FOUND,
+                         "No complete LoRA A/B pairs were applied under " + one_adapter_dir);
+        }
+        if (out_stats) {
+            *out_stats = local_stats;
+        }
+        if (print_log) {
+            std::cout << "[CudaRuntime] LoRA applied: updated=" << local_stats.updated_matrices
+                      << ", skipped=" << local_stats.skipped_matrices
+                      << ", scale=" << local_stats.scale_used
+                      << ", wall_ms=" << local_stats.wall_ms << std::endl;
         }
         return Error::success();
     };
 
-    for (const auto& kv : pairs) {
-        const ABPair& p = kv.second;
-        if (p.a_name.empty() || p.b_name.empty()) {
-            local_stats.skipped_matrices++;
-            continue;
-        }
-
-        LoraTargetKey key{};
-        if (!parse_lora_target_key(p.a_name, key)) {
-            local_stats.skipped_matrices++;
-            continue;
-        }
-
-        const SafetensorsMeta* a_meta = loader.get_meta(p.a_name);
-        const SafetensorsMeta* b_meta = loader.get_meta(p.b_name);
-        if (!a_meta || !b_meta || a_meta->shape.size() != 2 || b_meta->shape.size() != 2) {
-            return Error(ErrorCode::SHAPE_MISMATCH,
-                         "Invalid LoRA tensor shape for pair: " + p.a_name + " / " + p.b_name);
-        }
-
-        void* weight_ptr = nullptr;
-        int out_dim = 0;
-        int in_dim = 0;
-        int device_id = 0;
-        EMBER_RETURN_IF_ERROR(pick_target(key.layer_idx, key.proj, &weight_ptr, &out_dim, &in_dim, &device_id));
-
-        const int r = static_cast<int>(a_meta->shape[0]);
-        const int a_in = static_cast<int>(a_meta->shape[1]);
-        const int b_out = static_cast<int>(b_meta->shape[0]);
-        const int b_r = static_cast<int>(b_meta->shape[1]);
-        if (r <= 0 || a_in <= 0 || b_out <= 0 || b_r <= 0) {
-            return Error(ErrorCode::SHAPE_MISMATCH,
-                         "Non-positive LoRA dimensions for pair: " + p.a_name + " / " + p.b_name);
-        }
-        if (a_in != in_dim || b_out != out_dim || b_r != r) {
-            return Error(ErrorCode::SHAPE_MISMATCH,
-                         "LoRA shape mismatch at layer " + std::to_string(key.layer_idx) +
-                         " proj " + key.proj +
-                         " (A=[" + std::to_string(r) + "," + std::to_string(a_in) + "]"
-                         ", B=[" + std::to_string(b_out) + "," + std::to_string(b_r) + "]"
-                         ", expected out=" + std::to_string(out_dim) +
-                         ", in=" + std::to_string(in_dim) + ")");
-        }
-
-        void* d_a = nullptr;
-        void* d_b = nullptr;
-        auto cleanup = [&]() {
-            cuda_free(d_a);
-            cuda_free(d_b);
-            d_a = nullptr;
-            d_b = nullptr;
-        };
-
-        err = load_tensor_to_device(loader, p.a_name, device_id, weights_.dtype, &d_a);
-        if (err) {
-            cleanup();
-            return err;
-        }
-        err = load_tensor_to_device(loader, p.b_name, device_id, weights_.dtype, &d_b);
-        if (err) {
-            cleanup();
-            return err;
-        }
-
-        cudaError_t cu_err = cudaSetDevice(device_id);
-        if (cu_err != cudaSuccess) {
-            cleanup();
-            return Error::cuda_error(std::string("cudaSetDevice failed: ") + cudaGetErrorString(cu_err));
-        }
-
-        cublasHandle_t handle = cublas_handles_[static_cast<size_t>(device_id)].get();
-        cudaStream_t stream = streams_[static_cast<size_t>(device_id)];
-
-        cublasStatus_t cb = cublasSetStream(handle, stream);
-        if (cb != CUBLAS_STATUS_SUCCESS) {
-            cleanup();
-            return Error::cuda_error("cublasSetStream failed: " + std::to_string(static_cast<int>(cb)));
-        }
-
-        // Row-major update:
-        //   W_row[out, in] += scale * (B_row[out, r] @ A_row[r, in])
-        // Compute through column-major view:
-        //   W_col[in, out] += scale * (A_col[in, r] @ B_col[r, out])
-        const float alpha = effective_scale;
-        const float beta = 1.0f;
-        cb = cublasGemmEx(
-            handle,
-            CUBLAS_OP_N, CUBLAS_OP_N,
-            in_dim, out_dim, r,
-            &alpha,
-            d_a, cuda_dtype, in_dim,
-            d_b, cuda_dtype, r,
-            &beta,
-            weight_ptr, cuda_dtype, in_dim,
-            CUBLAS_COMPUTE_32F,
-            CUBLAS_GEMM_DEFAULT_TENSOR_OP
-        );
-        if (cb != CUBLAS_STATUS_SUCCESS) {
-            cleanup();
-            return Error::cuda_error("cublasGemmEx (LoRA merge) failed: " + std::to_string(static_cast<int>(cb)));
-        }
-
-        cu_err = cudaStreamSynchronize(stream);
-        if (cu_err != cudaSuccess) {
-            cleanup();
-            return Error::cuda_error(std::string("cudaStreamSynchronize failed: ") + cudaGetErrorString(cu_err));
-        }
-
-        cleanup();
-        local_stats.updated_matrices++;
+    LoraApplyStats aggregate_stats{};
+    if (replace_existing && has_active_lora_adapter_) {
+        LoraApplyStats rollback_stats{};
+        Error rollback_err = apply_one(active_lora_adapter_dir_, -active_lora_scale_, false, &rollback_stats);
+        if (rollback_err) return rollback_err;
+        aggregate_stats.updated_matrices += rollback_stats.updated_matrices;
+        aggregate_stats.skipped_matrices += rollback_stats.skipped_matrices;
+        aggregate_stats.wall_ms += rollback_stats.wall_ms;
+        has_active_lora_adapter_ = false;
+        active_lora_adapter_dir_.clear();
+        active_lora_scale_ = 0.0f;
     }
 
-    auto t1 = std::chrono::high_resolution_clock::now();
-    local_stats.wall_ms = static_cast<float>(
-        std::chrono::duration<double, std::milli>(t1 - t0).count());
+    LoraApplyStats local_stats{};
+    Error err = apply_one(adapter_dir, scale, true, &local_stats);
+    if (err) return err;
+    aggregate_stats.updated_matrices += local_stats.updated_matrices;
+    aggregate_stats.skipped_matrices += local_stats.skipped_matrices;
+    aggregate_stats.scale_used = local_stats.scale_used;
+    aggregate_stats.wall_ms += local_stats.wall_ms;
+
+    has_active_lora_adapter_ = true;
+    active_lora_adapter_dir_ = adapter_dir;
+    active_lora_scale_ = scale;
 
     if (stats) {
-        *stats = local_stats;
+        *stats = aggregate_stats;
     }
-    if (local_stats.updated_matrices <= 0) {
-        return Error(ErrorCode::WEIGHT_NOT_FOUND,
-                     "No complete LoRA A/B pairs were applied under " + adapter_dir);
-    }
-
-    std::cout << "[CudaRuntime] LoRA applied: updated=" << local_stats.updated_matrices
-              << ", skipped=" << local_stats.skipped_matrices
-              << ", scale=" << local_stats.scale_used
-              << ", wall_ms=" << local_stats.wall_ms << std::endl;
     return Error::success();
 }
 
@@ -1187,6 +1227,9 @@ void CudaRuntime::unload() {
         }
     }
     weights_.layers.clear();
+    has_active_lora_adapter_ = false;
+    active_lora_adapter_dir_.clear();
+    active_lora_scale_ = 0.0f;
     
     // 销毁 streams 和 cuBLAS 句柄
     for (auto& stream : streams_) {

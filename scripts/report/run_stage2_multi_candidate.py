@@ -116,6 +116,7 @@ def write_summary_md(path: Path, model_dir: Path, row: Dict[str, str], cand: Lis
         "prompt_len",
         "gen_len",
         "num_candidates",
+        "num_stop_sequences",
         "gpus",
         "split",
         "prefill_ms",
@@ -174,6 +175,9 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--top-k", type=int, default=40)
+    ap.add_argument("--stop-seqs", type=str, default="", help="stop sequences joined by ||, e.g. '<|im_end|>||###'")
+    ap.add_argument("--strip-stop", action="store_true", default=True)
+    ap.add_argument("--no-strip-stop", dest="strip_stop", action="store_false")
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--decode-text", action="store_true", default=True)
     ap.add_argument("--no-decode-text", dest="decode_text", action="store_false")
@@ -228,6 +232,12 @@ def main() -> None:
         "--candidates-jsonl",
         str(cand_path),
     ]
+    if args.stop_seqs.strip():
+        stop_list = [x for x in args.stop_seqs.split("||") if x]
+        for s in stop_list:
+            cmd += ["--stop-seq", s]
+    if not args.strip_stop:
+        cmd += ["--no-strip-stop"]
     if args.prompt:
         cmd += ["--prompt", args.prompt]
     if args.overlap:

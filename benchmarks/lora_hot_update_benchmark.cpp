@@ -52,6 +52,7 @@ int main(int argc, char** argv) {
     std::vector<int> gpus = {0, 1};
     std::vector<int> split = {};
     float scale = 1.0f;
+    bool replace_existing = false;
     int iters = 1;
     int warmup = 0;
     std::string csv_path;
@@ -73,6 +74,7 @@ int main(int argc, char** argv) {
                 << "  --gpus LIST         e.g. 0 or 0,1 (default: 0,1)\n"
                 << "  --split A,B         layer split for 2 GPUs (default: even)\n"
                 << "  --scale X           user scale before alpha/r (default: 1.0)\n"
+                << "  --replace-existing  unmerge previous adapter before applying new one\n"
                 << "  --iters N           measured iterations (default: 1)\n"
                 << "  --warmup N          warmup iterations (default: 0)\n"
                 << "  --csv PATH          write CSV row (default: stdout)\n";
@@ -87,6 +89,8 @@ int main(int argc, char** argv) {
             split = split_ints(need("--split"));
         } else if (arg == "--scale") {
             scale = std::stof(need("--scale"));
+        } else if (arg == "--replace-existing") {
+            replace_existing = true;
         } else if (arg == "--iters") {
             iters = std::stoi(need("--iters"));
         } else if (arg == "--warmup") {
@@ -167,7 +171,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < warmup + iters; ++i) {
         ember::cuda::CudaRuntime::LoraApplyStats st{};
         auto t0 = std::chrono::high_resolution_clock::now();
-        err = cuda_rt->apply_lora_adapter(adapter_dir, scale, &st);
+        err = cuda_rt->apply_lora_adapter(adapter_dir, scale, replace_existing, &st);
         auto t1 = std::chrono::high_resolution_clock::now();
         if (err) die("apply_lora_adapter failed: " + err.to_string());
 
@@ -197,6 +201,7 @@ int main(int argc, char** argv) {
         << join_with_plus(gpus) << ","
         << join_with_plus(split) << ","
         << scale << ","
+        << (replace_existing ? 1 : 0) << ","
         << effective_scale << ","
         << iters << ","
         << warmup << ","
@@ -206,7 +211,7 @@ int main(int argc, char** argv) {
         << inner_ms_avg;
 
     const std::string header =
-        "mode,model_dir,adapter_dir,gpus,split,scale,effective_scale,iters,warmup,"
+        "mode,model_dir,adapter_dir,gpus,split,scale,replace_existing,effective_scale,iters,warmup,"
         "updated_matrices,skipped_matrices,apply_ms_ext,apply_ms_inner";
 
     if (!csv_path.empty()) {
