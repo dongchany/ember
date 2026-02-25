@@ -23,7 +23,7 @@
 
 ```json
 {
-  "required": ["employee_id", "name", "age", "active", "city", "score", "join_date"],
+  "required": [],
   "fields": {
     "employee_id": "string",
     "name": "string",
@@ -32,6 +32,15 @@
     "city": "string",
     "score": "number",
     "join_date": "string"
+  },
+  "field_weights": {
+    "employee_id": 1.0,
+    "name": 1.0,
+    "age": 1.0,
+    "active": 1.0,
+    "city": 1.0,
+    "score": 1.0,
+    "join_date": 1.0
   }
 }
 ```
@@ -46,14 +55,14 @@
 严格要求：
 1) 输出 3 份 JSONL 数据（train/val/test）和 1 份 schema.json。
 2) 每条样本字段必须是: id, prompt, gold。
-3) gold 必须严格符合 schema 类型。
+3) gold 必须严格符合 schema 类型，且只保留“可确定字段”（无法确定字段直接省略，不填 null）。
 4) 不允许把 gold 直接写进 prompt（不能出现“标准答案/参考答案/gold/expected output”等泄漏词）。
 5) 任务必须有难度：
    - 多候选干扰（同名/近似字段）
    - 规则选择（过滤、排序、tie-break）
    - 噪声文本
    - 格式扰动（布尔/日期/数字表述变化）
-6) 约 20% 样本为“无有效目标”场景（按你定义的规则，gold 中至少一个 required 字段为 null）。
+6) 约 20% 样本为“无有效目标”场景：gold 必须是部分字段（1~6 个键），不能输出空对象 `{}`。
 7) train/val/test 的 id、prompt、(prompt+gold) 不能重复或泄漏。
 
 规模要求：
@@ -100,7 +109,7 @@ python3 scripts/train/run_stage52_validate_dataset.py \
   --out-dir reports/stage52_dataset_validation_external_v1
 ```
 
-通过后再进入训练：
+通过后再进入训练（评估默认使用 schema 中的 `field_weights` 计算 `mean_reward`）：
 
 ```bash
 ./sglang-env/bin/python scripts/train/run_stage52_sft_min.py \

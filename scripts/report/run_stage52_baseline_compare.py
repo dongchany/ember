@@ -66,6 +66,8 @@ def main() -> None:
                 "best_of_n_exact_rate": f"{float(s.get('best_of_n_exact_rate', 0.0)):.6f}",
                 "mean_reward_first": f"{float(s.get('mean_reward_first', 0.0)):.6f}",
                 "mean_reward_best": f"{float(s.get('mean_reward_best', 0.0)):.6f}",
+                "mean_weighted_acc_first": f"{float(s.get('mean_weighted_acc_first', s.get('mean_reward_first', 0.0))):.6f}",
+                "mean_weighted_acc_best": f"{float(s.get('mean_weighted_acc_best', s.get('mean_reward_best', 0.0))):.6f}",
                 "adapter": str(s.get("adapter", "")),
             }
         )
@@ -78,14 +80,16 @@ def main() -> None:
         "# Stage 5.2 Baseline Compare",
         "",
         f"- Generated at: `{dt.datetime.now().isoformat(timespec='seconds')}`",
+        "- Primary metric: `mean_reward` (weighted/partial-credit). Secondary: `pass@1`.",
         "",
-        "| label | samples | N | pass@1 | pass@N | best_exact | reward_first | reward_best |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| label | samples | N | reward_first | reward_best | weighted_first | weighted_best | pass@1 | pass@N | best_exact |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in rows:
         lines.append(
-            f"| {r['label']} | {r['num_samples']} | {r['num_candidates']} | {r['pass_at_1']} | "
-            f"{r['pass_at_n']} | {r['best_of_n_exact_rate']} | {r['mean_reward_first']} | {r['mean_reward_best']} |"
+            f"| {r['label']} | {r['num_samples']} | {r['num_candidates']} | {r['mean_reward_first']} | {r['mean_reward_best']} | "
+            f"{r['mean_weighted_acc_first']} | {r['mean_weighted_acc_best']} | {r['pass_at_1']} | "
+            f"{r['pass_at_n']} | {r['best_of_n_exact_rate']} |"
         )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

@@ -64,6 +64,7 @@ def evaluate_candidate(
     pred_text: str,
     gold_obj: Dict[str, Any],
     schema_fields: Dict[str, str],
+    field_weights: Dict[str, float],
     required_fields: List[str],
     reward_mode: str,
 ) -> Dict[str, Any]:
@@ -78,26 +79,34 @@ def evaluate_candidate(
     type_mismatch = 0
     exact_match = 0
     field_total = 0
+    weighted_num = 0.0
+    weighted_den = 0.0
     for f in eval_fields:
         expected_t = schema_fields[f]
+        wt = float(field_weights.get(f, 1.0))
         field_total += 1
+        weighted_den += wt
+        matched = 0.0
         if f in pred_json:
             ok_t = type_ok(pred_json[f], expected_t)
             if not ok_t:
                 type_mismatch += 1
             if ok_t and canonical_str(pred_json[f]) == canonical_str(gold_obj.get(f, None)):
                 exact_match += 1
+                matched = 1.0
+        weighted_num += wt * matched
 
     schema_ok = (missing_required == 0 and type_mismatch == 0)
     field_acc = (exact_match / field_total) if field_total > 0 else 0.0
+    weighted_acc = (weighted_num / weighted_den) if weighted_den > 0 else 0.0
     exact_all = (field_total > 0 and exact_match == field_total and parse_ok and schema_ok)
 
     if reward_mode == "binary":
         reward = 1.0 if exact_all else 0.0
     elif reward_mode == "weighted":
-        reward = field_acc
+        reward = weighted_acc
     elif reward_mode == "decomposed":
-        reward = (0.2 if parse_ok else 0.0) + (0.2 if schema_ok else 0.0) + (0.6 * field_acc)
+        reward = (0.2 if parse_ok else 0.0) + (0.2 if schema_ok else 0.0) + (0.6 * weighted_acc)
     else:
         die(f"unknown reward mode: {reward_mode}")
         raise AssertionError("unreachable")
@@ -110,6 +119,7 @@ def evaluate_candidate(
         "field_exact_match": exact_match,
         "field_total": field_total,
         "field_acc": field_acc,
+        "weighted_acc": weighted_acc,
         "exact_all": 1 if exact_all else 0,
         "reward": reward,
     }
@@ -175,10 +185,25 @@ def main() -> None:
     schema = load_json(schema_path)
     fields = schema.get("fields", {})
     required = schema.get("required", [])
+    weights = schema.get("field_weights", {})
     if not isinstance(fields, dict) or not isinstance(required, list):
         die("schema invalid; need fields object and required list")
+    if not isinstance(weights, dict):
+        die("schema invalid; field_weights must be an object if provided")
     schema_fields: Dict[str, str] = {str(k): str(v) for k, v in fields.items()}
     required_fields = [str(x) for x in required]
+    field_weights: Dict[str, float] = {k: 1.0 for k in schema_fields.keys()}
+    for k, v in weights.items():
+        ks = str(k)
+        if ks not in schema_fields:
+            die(f"schema invalid; field_weights has unknown field: {ks}")
+        try:
+            wv = float(v)
+        except Exception:
+            die(f"schema invalid; field_weights[{ks}] must be number")
+        if wv < 0:
+            die(f"schema invalid; field_weights[{ks}] must be >= 0")
+        field_weights[ks] = wv
 
     dtype = dtype_from_name(args.dtype)
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True, use_fast=False)
@@ -206,6 +231,8 @@ def main() -> None:
     best_pass = 0
     mean_reward_first = 0.0
     mean_reward_best = 0.0
+    mean_weighted_first = 0.0
+    mean_weighted_best = 0.0
 
     for i, sample in enumerate(data):
         sid = str(sample["id"])
@@ -245,6 +272,7 @@ def main() -> None:
                 pred_text=text,
                 gold_obj=gold,
                 schema_fields=schema_fields,
+                field_weights=field_weights,
                 required_fields=required_fields,
                 reward_mode=args.reward_mode,
             )
@@ -255,6 +283,7 @@ def main() -> None:
                     "candidate_id": str(c),
                     "reward": f"{float(ev['reward']):.6f}",
                     "field_acc": f"{float(ev['field_acc']):.6f}",
+                    "weighted_acc": f"{float(ev['weighted_acc']):.6f}",
                     "exact_all": str(ev["exact_all"]),
                     "parse_ok": str(ev["parse_ok"]),
                     "schema_ok": str(ev["schema_ok"]),
@@ -265,7 +294,15 @@ def main() -> None:
             )
 
         first_ev = cand_scores[0][1]
-        best = max(cand_scores, key=lambda x: (float(x[1]["reward"]), float(x[1]["field_acc"]), int(x[1]["exact_all"])))
+        best = max(
+            cand_scores,
+            key=lambda x: (
+                float(x[1]["reward"]),
+                float(x[1]["weighted_acc"]),
+                float(x[1]["field_acc"]),
+                int(x[1]["exact_all"]),
+            ),
+        )
         any_exact = any(int(x[1]["exact_all"]) == 1 for x in cand_scores)
 
         pass1 += int(first_ev["exact_all"])
@@ -273,12 +310,15 @@ def main() -> None:
         best_pass += int(best[1]["exact_all"])
         mean_reward_first += float(first_ev["reward"])
         mean_reward_best += float(best[1]["reward"])
+        mean_weighted_first += float(first_ev["weighted_acc"])
+        mean_weighted_best += float(best[1]["weighted_acc"])
 
         best_rows.append(
             {
                 "id": sid,
                 "best_candidate_id": str(best[0]),
                 "best_reward": f"{float(best[1]['reward']):.6f}",
+                "best_weighted_acc": f"{float(best[1]['weighted_acc']):.6f}",
                 "best_field_acc": f"{float(best[1]['field_acc']):.6f}",
                 "best_exact_all": str(best[1]["exact_all"]),
                 "pass_at_1": str(first_ev["exact_all"]),
@@ -296,6 +336,8 @@ def main() -> None:
         "best_of_n_exact_rate": best_pass / n,
         "mean_reward_first": mean_reward_first / n,
         "mean_reward_best": mean_reward_best / n,
+        "mean_weighted_acc_first": mean_weighted_first / n,
+        "mean_weighted_acc_best": mean_weighted_best / n,
     }
 
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -324,6 +366,8 @@ def main() -> None:
         f"| best_of_n_exact_rate | {summary['best_of_n_exact_rate']:.6f} |",
         f"| mean_reward_first | {summary['mean_reward_first']:.6f} |",
         f"| mean_reward_best | {summary['mean_reward_best']:.6f} |",
+        f"| mean_weighted_acc_first | {summary['mean_weighted_acc_first']:.6f} |",
+        f"| mean_weighted_acc_best | {summary['mean_weighted_acc_best']:.6f} |",
     ]
     summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

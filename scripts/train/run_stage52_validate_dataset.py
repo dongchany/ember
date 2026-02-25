@@ -132,8 +132,11 @@ def parse_dataset_specs(args: argparse.Namespace) -> Dict[str, Path]:
 def validate_schema(schema: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
     required = schema.get("required", [])
     fields = schema.get("fields", {})
+    weights = schema.get("field_weights", {})
     if not isinstance(required, list) or not isinstance(fields, dict):
         die("schema invalid: need {required: [...], fields: {...}}")
+    if not isinstance(weights, dict):
+        die("schema invalid: field_weights must be object if provided")
     req = [str(x) for x in required]
     fmap: Dict[str, str] = {}
     for k, v in fields.items():
@@ -145,6 +148,16 @@ def validate_schema(schema: Dict[str, Any]) -> Tuple[List[str], Dict[str, str]]:
     for r in req:
         if r not in fmap:
             die(f"schema invalid: required field not in fields: {r}")
+    for k, v in weights.items():
+        ks = str(k)
+        if ks not in fmap:
+            die(f"schema invalid: field_weights has unknown field: {ks}")
+        try:
+            wv = float(v)
+        except Exception:
+            die(f"schema invalid: field_weights[{ks}] must be number")
+        if wv < 0:
+            die(f"schema invalid: field_weights[{ks}] must be >= 0")
     return req, fmap
 
 

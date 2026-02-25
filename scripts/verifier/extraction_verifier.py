@@ -162,13 +162,31 @@ def main() -> None:
     schema_fields: Dict[str, str] = {str(k): str(v) for k, v in fields.items()}
     required_fields = [str(x) for x in required]
 
-    weights: Dict[str, float] = {}
+    weights: Dict[str, float] = {k: 1.0 for k in schema_fields.keys()}
+    schema_weights = schema.get("field_weights", {})
+    if schema_weights is not None:
+        if not isinstance(schema_weights, dict):
+            die("schema.field_weights must be an object")
+        for k, v in schema_weights.items():
+            ks = str(k)
+            if ks not in schema_fields:
+                die(f"schema.field_weights has unknown field: {ks}")
+            try:
+                wv = float(v)
+            except Exception:
+                die(f"schema.field_weights[{ks}] must be number")
+            if wv < 0:
+                die(f"schema.field_weights[{ks}] must be >= 0")
+            weights[ks] = wv
     if args.weights_json.strip():
         w = load_json(Path(args.weights_json).expanduser().resolve())
         if not isinstance(w, dict):
             die("--weights-json must be an object")
         for k, v in w.items():
-            weights[str(k)] = float(v)
+            ks = str(k)
+            if ks not in schema_fields:
+                die(f"--weights-json has unknown field: {ks}")
+            weights[ks] = float(v)
 
     pred_by_id: Dict[str, Dict[str, Any]] = {}
     for r in preds:
