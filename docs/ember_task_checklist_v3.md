@@ -131,15 +131,19 @@
 - [x] 支持加载 PEFT 格式 LoRA（A/B 矩阵）
 - [x] 推理注入（merge 到投影权重）：`W <- W + scale * (B @ A)`
 - [x] 热替换（不重载 base model；支持 `replace_existing` 先回滚后应用）
+- [x] `ember --check` 支持 `--adapter/--lora-scale`（可直接导出 LoRA 后 logits）
 - [ ] 数值验证：和 HF PEFT 推理结果对齐（atol < 1e-4）
 - [x] 导出热更新延迟
 
 **新增产出（2026-02-25）：**
 - `benchmarks/lora_hot_update_benchmark.cpp`
 - `scripts/report/run_stage1_lora_hot_update.py`
+- `scripts/report/run_stage31_lora_numeric_align.py`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline/stage31_summary.md`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline_avg/stage31_lora_hot_update.csv`
 - `reports/stage31_lora_hot_update_4b_20260225_replace_mainline/stage31_summary.md`
+- `reports/stage31_lora_numeric_align_4b_20260225_synth_mainline/stage31_lora_numeric_align.csv`
+- `reports/stage31_lora_numeric_align_4b_20260225_synth_bf16/stage31_lora_numeric_align.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -147,6 +151,7 @@
 - 稳态（iters=3, warmup=1）：`28.206 ms`
 - 热替换稳态（iters=3, warmup=1, replace_existing=1）：`51.538 ms`
 - 本次更新矩阵数：增量 merge `144`；热替换（回滚+应用）`288`
+- LoRA numeric align（synthetic adapter, fp16 HF）：`delta_max_abs_diff=0.67611670`（未达 `1e-4`，该项继续 pending）
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 

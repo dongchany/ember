@@ -152,7 +152,8 @@ static bool write_f32_binary(const fs::path& path, const std::vector<float>& val
 
 static bool write_check_meta(const fs::path& path, const std::string& model_path,
                              const std::string& prompt, int vocab_size,
-                             int hidden_size, int num_layers, int token_count) {
+                             int hidden_size, int num_layers, int token_count,
+                             const std::string& adapter_path, float lora_scale) {
     std::ofstream out(path);
     if (!out.is_open()) return false;
     out << "{\n";
@@ -169,7 +170,14 @@ static bool write_check_meta(const fs::path& path, const std::string& model_path
     out << "  \"vocab_size\": " << vocab_size << ",\n";
     out << "  \"hidden_size\": " << hidden_size << ",\n";
     out << "  \"num_layers\": " << num_layers << ",\n";
-    out << "  \"token_count\": " << token_count << "\n";
+    out << "  \"token_count\": " << token_count;
+    if (!adapter_path.empty()) {
+        out << ",\n";
+        out << "  \"adapter_path\": \"" << adapter_path << "\",\n";
+        out << "  \"lora_scale\": " << lora_scale << "\n";
+    } else {
+        out << "\n";
+    }
     out << "}\n";
     return true;
 }
@@ -444,6 +452,26 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (!args.adapter_path.empty()) {
+        auto* cuda_rt = dynamic_cast<ember::cuda::CudaRuntime*>(runtime.get());
+        if (cuda_rt == nullptr) {
+            std::cerr << "Error: --adapter is only supported by CUDA runtime\n";
+            return 1;
+        }
+        ember::cuda::CudaRuntime::LoraApplyStats st{};
+        err = cuda_rt->apply_lora_adapter(args.adapter_path, args.lora_scale, false, &st);
+        if (err) {
+            std::cerr << "Error applying LoRA adapter: " << err.message() << "\n";
+            return 1;
+        }
+        std::cout << "[LoRA] Applied adapter: " << args.adapter_path
+                  << " (scale=" << args.lora_scale
+                  << ", effective_scale=" << st.scale_used
+                  << ", updated=" << st.updated_matrices
+                  << ", skipped=" << st.skipped_matrices
+                  << ", wall_ms=" << st.wall_ms << ")\n";
+    }
+
     auto end_load = std::chrono::high_resolution_clock::now();
     auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_load - start_load).count();
     std::cout << "[Loaded] in " << load_time << " ms\n\n";
@@ -531,7 +559,8 @@ int main(int argc, char** argv) {
         ok &= write_f32_binary(out_dir / "logits.bin", logits);
         ok &= write_check_meta(out_dir / "meta.json", args.model_path, formatted_prompt,
                                model_config.vocab_size, model_config.hidden_size,
-                               model_config.num_layers, static_cast<int>(tokens.size()));
+                               model_config.num_layers, static_cast<int>(tokens.size()),
+                               args.adapter_path, args.lora_scale);
         
         if (!ok) {
             std::cerr << "[Check] Failed to write debug outputs in " << out_dir.string() << "\n";

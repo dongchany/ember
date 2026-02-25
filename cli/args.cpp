@@ -13,6 +13,9 @@ void print_usage(const char* prog) {
     std::cout << "Usage: " << prog << " -m <model_path> [options]\n\n";
     std::cout << "Required:\n";
     std::cout << "  -m, --model PATH        Model directory (with safetensors and config.json)\n\n";
+    std::cout << "LoRA:\n";
+    std::cout << "  --adapter PATH          LoRA adapter directory (PEFT format)\n";
+    std::cout << "  --lora-scale F          External LoRA scale multiplier (default: 1.0)\n\n";
     std::cout << "GPU Options:\n";
     std::cout << "  --devices 0,1           GPU devices to use (default: 0)\n";
     std::cout << "  --memory-fraction F     Max memory fraction per GPU (default: 0.9)\n\n";
@@ -48,6 +51,14 @@ bool parse_args(int argc, char** argv, Args& args) {
         if (arg == "-m" || arg == "--model") {
             if (++i >= argc) { std::cerr << "Missing model path\n"; return false; }
             args.model_path = argv[i];
+        }
+        else if (arg == "--adapter") {
+            if (++i >= argc) { std::cerr << "Missing adapter path\n"; return false; }
+            args.adapter_path = argv[i];
+        }
+        else if (arg == "--lora-scale") {
+            if (++i >= argc) { std::cerr << "Missing lora-scale\n"; return false; }
+            args.lora_scale = std::stof(argv[i]);
         }
         else if (arg == "-p" || arg == "--prompt") {
             if (++i >= argc) { std::cerr << "Missing prompt\n"; return false; }
