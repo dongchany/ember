@@ -133,7 +133,7 @@
 - [x] 热替换（不重载 base model；支持 `replace_existing` 先回滚后应用）
 - [x] `ember --check` 支持 `--adapter/--lora-scale`（可直接导出 LoRA 后 logits）
 - [x] 权重空间数值校验：`W_after - W_before` 对齐 `B @ A * scale`（误差 ~2e-4）
-- [ ] 数值验证：和 HF PEFT 推理结果对齐（atol < 1e-4）
+- [~] 数值验证：和 HF PEFT 推理结果对齐（atol < 1e-4，受 base forward 偏差阻塞）
 - [x] 导出热更新延迟
 
 **新增产出（2026-02-25）：**
@@ -167,6 +167,7 @@
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_block_align_profile.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_attn_residual_decomp.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline_v2/stage31_attn_residual_decomp.csv`
+- `reports/stage31_lora_numeric_align_dtype_sweep_4b_20260225_mainline/stage31_dtype_sweep.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -190,6 +191,10 @@
   - perturb adapter: `max(delta_residual)=1.75`, `max(delta_gap)=0.9609375`
   - init adapter: `max(delta_residual)=0.0`, `max(delta_gap)=0.0`
   - `delta_input_max` 在 layer33/35 与 `delta_residual_max` 等幅（share=1.0），而 `delta_attn_max` 显著更小，说明 LoRA-delta 偏差主来源是 layer input 路径（上游累积）而不是当前层 attn_out
+- HF dtype sweep（float16/bfloat16/float32@cpu）：
+  - init adapter：`delta_max_abs_diff=0.0`（全部通过）
+  - perturb adapter：`delta_max_abs_diff` 仍为 `0.26039124`（float16）, `0.51296234`（bfloat16）, `0.26371694`（float32@cpu）
+  - 结论：非零 adapter 的端到端 delta 不对齐并非单纯由 HF dtype 选择造成
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
