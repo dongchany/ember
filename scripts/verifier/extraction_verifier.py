@@ -84,7 +84,10 @@ def evaluate_one(
     weighted_den = 0.0
     per_field: Dict[str, float] = {}
 
-    for f, expected_t in schema_fields.items():
+    # Score only fields present in gold to support partial target rows.
+    eval_fields = [f for f in gold_obj.keys() if f in schema_fields]
+    for f in eval_fields:
+        expected_t = schema_fields[f]
         field_total += 1
         wt = field_weights.get(f, 1.0)
         weighted_den += wt

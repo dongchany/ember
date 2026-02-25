@@ -73,10 +73,13 @@ def evaluate_candidate(
         pred_json = {}
 
     missing_required = sum(1 for f in required_fields if f not in pred_json)
+    # Score only fields that are present in gold (supports partial/optional target rows).
+    eval_fields = [f for f in gold_obj.keys() if f in schema_fields]
     type_mismatch = 0
     exact_match = 0
     field_total = 0
-    for f, expected_t in schema_fields.items():
+    for f in eval_fields:
+        expected_t = schema_fields[f]
         field_total += 1
         if f in pred_json:
             ok_t = type_ok(pred_json[f], expected_t)
@@ -112,7 +115,13 @@ def evaluate_candidate(
     }
 
 
-def build_prompt(tokenizer, prompt: str) -> str:
+def build_prompt(tokenizer, prompt: str, force_json_output: bool) -> str:
+    if force_json_output:
+        prompt = (
+            "请只输出一个合法 JSON 对象，不要输出解释、推理过程或代码块标记。\n"
+            "如果某字段无法确定，请在 JSON 中省略该字段。\n\n"
+            f"{prompt}"
+        )
     return render_chat(tokenizer, prompt=prompt, response=None, add_generation_prompt=True)
 
 
@@ -129,6 +138,8 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.7)
     ap.add_argument("--top-p", type=float, default=0.9)
     ap.add_argument("--top-k", type=int, default=40)
+    ap.add_argument("--decode-mode", type=str, default="sample", choices=["sample", "greedy"])
+    ap.add_argument("--force-json-output", action="store_true", default=False)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--reward-mode", type=str, default="weighted", choices=["binary", "weighted", "decomposed"])
     ap.add_argument("--max-samples", type=int, default=0)
@@ -200,7 +211,7 @@ def main() -> None:
         sid = str(sample["id"])
         prompt = str(sample["prompt"])
         gold = sample["gold"]
-        full_prompt = build_prompt(tokenizer, prompt)
+        full_prompt = build_prompt(tokenizer, prompt, force_json_output=args.force_json_output)
         enc = tokenizer(full_prompt, return_tensors="pt")
         input_ids = enc["input_ids"].to(args.device)
         attn = enc["attention_mask"].to(args.device)
@@ -209,16 +220,25 @@ def main() -> None:
         for c in range(args.num_candidates):
             seed = args.seed + i * 1000 + c
             torch.manual_seed(seed)
-            out = model.generate(
-                input_ids=input_ids,
-                attention_mask=attn,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=True,
-                temperature=args.temperature,
-                top_p=args.top_p,
-                top_k=args.top_k,
-                pad_token_id=tokenizer.eos_token_id,
-            )
+            if args.decode_mode == "greedy":
+                out = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attn,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
+            else:
+                out = model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attn,
+                    max_new_tokens=args.max_new_tokens,
+                    do_sample=True,
+                    temperature=args.temperature,
+                    top_p=args.top_p,
+                    top_k=args.top_k,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
             gen = out[0, input_ids.shape[1] :]
             text = tokenizer.decode(gen, skip_special_tokens=True)
             ev = evaluate_candidate(

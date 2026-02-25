@@ -407,6 +407,14 @@
 - `reports/stage52_best_of_n_4b_dpo_20260226_hardrule_v1_n1_32/stage52_summary.json`
 - `reports/stage52_best_of_n_4b_dpo_20260226_hardrule_v1_n4_32/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_hardrule_v1/stage52_baseline_compare.md`
+- `reports/stage52_dataset_validation_external_zip22_v1/stage52_dataset_validation_summary.md`
+- `reports/stage52_dataset_validation_external_zip22_optional_v1/stage52_dataset_validation_summary.md`
+- `reports/stage52_sft_min_4b_20260225_external_zip22_qlora_v1/stage52_sft_summary.md`
+- `reports/stage52_best_of_n_4b_base_20260225_external_zip22_n1_100/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260225_external_zip22_v1_n1_100/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_base_20260225_external_zip22_n1_100_greedyjson/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260225_external_zip22_v1_n1_100_greedyjson/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260225_external_zip22_v1/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -415,6 +423,8 @@
 - 已引入 `hard_rule` 难度（active 过滤 + score 排序 + 日期 tie-break）后，4B base 在 `max_samples=32` 上降到 `pass@1=0.84375`（不再饱和），`best-of-4` 升至 `pass@4=0.875`。
 - 新的 QLoRA 训练（v2：`max_steps=12`, `max_length=128`, `max_train_samples=32`）得到 `training_loss=2.2477`，并将 `pass@1` 提升到 `0.875`（相对 base `+3.125pp`）；该配置下 `N=4` 未进一步提升（仍 `0.875`）。
 - DPO 最小环（hard_rule synthetic pairs，`max_steps=12`, `max_length=96`, `reference_mode=none`）已复跑并成功收敛训练日志，但在同口径评估下暂未超过 base（`N=1: 0.84375`, `N=4: 0.875` 与 base 持平），后续需提升 pair 难度/质量与 reference 配置。
+- 外部数据（`files(22).zip`, 400/100/100）验收：原始 schema 下 `missing_required=120, type_mismatch=0`；采用 optional-fields schema（`required=[]`）后 validator 全通过（suspicious=0, cross-split overlap=0）。
+- 外部数据基线（test=100）显示解码策略影响显著：`sample N=1` 下 base/SFT 都接近 0；启用 `greedy + force-json-output` 后，base `pass@1=0.02, mean_reward=0.1797`，SFT `pass@1=0.03, mean_reward=0.3619`，SFT 相对 base 有明显提升。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
