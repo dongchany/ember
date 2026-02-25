@@ -144,6 +144,7 @@
 - `scripts/report/run_stage31_lora_weight_merge_check.py`
 - `scripts/report/run_stage31_lora_delta_profile.py`
 - `scripts/report/run_stage31_block_align_profile.py`
+- `scripts/report/run_stage31_base_operator_spotcheck.py`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline/stage31_summary.md`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline_avg/stage31_lora_hot_update.csv`
 - `reports/stage31_lora_hot_update_4b_20260225_replace_mainline/stage31_summary.md`
@@ -168,6 +169,7 @@
 - `reports/stage31_block_align_profile_4b_20260225_peft_perturb_mainline_v2/stage31_attn_residual_decomp.csv`
 - `reports/stage31_block_align_profile_4b_20260225_peft_init_mainline_v2/stage31_attn_residual_decomp.csv`
 - `reports/stage31_lora_numeric_align_dtype_sweep_4b_20260225_mainline/stage31_dtype_sweep.csv`
+- `reports/stage31_base_operator_spotcheck_4b_20260225_mainline/stage31_base_operator_spotcheck.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -195,6 +197,10 @@
   - init adapter：`delta_max_abs_diff=0.0`（全部通过）
   - perturb adapter：`delta_max_abs_diff` 仍为 `0.26039124`（float16）, `0.51296234`（bfloat16）, `0.26371694`（float32@cpu）
   - 结论：非零 adapter 的端到端 delta 不对齐并非单纯由 HF dtype 选择造成
+- Base operator spotcheck（layer0/1）：
+  - layer1: `post_attn_norm_max_abs_diff=4.198868`, `gate_proj_max_abs_diff=6.213398`
+  - 但在 `Ember norm input` 下：`gate_proj_max_abs_diff=0.031280`
+  - 说明主要偏差来自上游 `norm/residual` 输入路径被后续线性层放大，非 gate/up GEMM 或 LoRA merge 本身
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
