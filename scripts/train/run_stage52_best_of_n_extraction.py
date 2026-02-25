@@ -119,6 +119,7 @@ def build_prompt(tokenizer, prompt: str) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Stage 5.2 Best-of-N extraction baseline.")
     ap.add_argument("--model", type=str, required=True)
+    ap.add_argument("--adapter", type=str, default="", help="optional PEFT LoRA adapter dir for inference")
     ap.add_argument("--dataset-jsonl", type=str, required=True, help='rows: {"id","prompt","gold"}')
     ap.add_argument("--schema-json", type=str, required=True, help='{"required":[...],"fields":{"k":"string"}}')
     ap.add_argument("--device", type=str, default="cuda:0")
@@ -140,11 +141,14 @@ def main() -> None:
         die("--max-new-tokens must be > 0")
 
     model_dir = Path(args.model).expanduser().resolve()
+    adapter_dir = Path(args.adapter).expanduser().resolve() if args.adapter.strip() else None
     ds_path = Path(args.dataset_jsonl).expanduser().resolve()
     schema_path = Path(args.schema_json).expanduser().resolve()
     for p in [model_dir, ds_path, schema_path]:
         if not p.exists():
             die(f"missing path: {p}")
+    if adapter_dir is not None and not adapter_dir.exists():
+        die(f"adapter path not found: {adapter_dir}")
 
     data = load_jsonl(ds_path)
     if not data:
@@ -175,6 +179,12 @@ def main() -> None:
         local_files_only=True,
         torch_dtype=dtype,
     )
+    if adapter_dir is not None:
+        try:
+            from peft import PeftModel
+        except Exception as ex:
+            die(f"failed to import peft for --adapter: {ex}")
+        model = PeftModel.from_pretrained(model, str(adapter_dir), is_trainable=False)
     model.eval().to(args.device)
 
     per_candidate: List[Dict[str, str]] = []
@@ -260,6 +270,7 @@ def main() -> None:
     summary = {
         "num_samples": n,
         "num_candidates": args.num_candidates,
+        "adapter": str(adapter_dir) if adapter_dir is not None else "",
         "pass_at_1": pass1 / n,
         "pass_at_n": passn / n,
         "best_of_n_exact_rate": best_pass / n,

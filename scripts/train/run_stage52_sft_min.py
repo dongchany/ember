@@ -49,6 +49,8 @@ def write_summary_md(path: Path, data: Dict[str, Any]) -> None:
         f"- Max steps: `{data.get('max_steps', 0)}`",
         f"- Max length: `{data.get('max_length', 0)}`",
         f"- LoRA r/alpha/dropout: `{data.get('lora_r', 0)}/{data.get('lora_alpha', 0)}/{data.get('lora_dropout', 0)}`",
+        f"- load_in_4bit: `{data.get('load_in_4bit', False)}`",
+        f"- bnb4bit: dtype=`{data.get('bnb_4bit_compute_dtype', '')}`, quant=`{data.get('bnb_4bit_quant_type', '')}`, double_quant=`{data.get('bnb_4bit_use_double_quant', True)}`",
         f"- Training loss: `{data.get('training_loss', 'n/a')}`",
         "",
         f"- Adapter dir: `{data.get('adapter_dir', '')}`",
@@ -74,6 +76,11 @@ def main() -> None:
     ap.add_argument("--lora-alpha", type=int, default=16)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
     ap.add_argument("--target-modules", type=str, default="q_proj,k_proj,v_proj,o_proj")
+    ap.add_argument("--load-in-4bit", action="store_true", default=False)
+    ap.add_argument("--bnb-4bit-compute-dtype", type=str, default="float16", choices=["float16", "bfloat16", "float32"])
+    ap.add_argument("--bnb-4bit-quant-type", type=str, default="nf4", choices=["nf4", "fp4"])
+    ap.add_argument("--bnb-4bit-use-double-quant", action="store_true", default=True)
+    ap.add_argument("--no-bnb-4bit-use-double-quant", dest="bnb_4bit_use_double_quant", action="store_false")
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
 
@@ -135,6 +142,14 @@ def main() -> None:
         args.target_modules,
         "--save-tokenizer",
     ]
+    if args.load_in_4bit:
+        cmd.append("--load-in-4bit")
+        cmd += ["--bnb-4bit-compute-dtype", args.bnb_4bit_compute_dtype]
+        cmd += ["--bnb-4bit-quant-type", args.bnb_4bit_quant_type]
+        if args.bnb_4bit_use_double_quant:
+            cmd.append("--bnb-4bit-use-double-quant")
+        else:
+            cmd.append("--no-bnb-4bit-use-double-quant")
     train_log = logs_dir / "train.log"
     with train_log.open("w", encoding="utf-8") as f:
         f.write("$ " + " ".join(cmd) + "\n\n")
@@ -161,6 +176,10 @@ def main() -> None:
         "lora_r": args.lora_r,
         "lora_alpha": args.lora_alpha,
         "lora_dropout": args.lora_dropout,
+        "load_in_4bit": args.load_in_4bit,
+        "bnb_4bit_compute_dtype": args.bnb_4bit_compute_dtype,
+        "bnb_4bit_quant_type": args.bnb_4bit_quant_type,
+        "bnb_4bit_use_double_quant": args.bnb_4bit_use_double_quant,
         "training_loss": loss,
         "adapter_dir": str(adapter_dir),
         "train_log": str(train_log),

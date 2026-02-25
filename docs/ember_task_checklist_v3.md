@@ -370,7 +370,7 @@
 
 ### 5.2 训练基线
 
-- [~] SFT 基线（HF + PEFT LoRA SFT；0.6B 已跑通，4B 受显存约束）
+- [x] SFT 基线（HF + PEFT LoRA SFT；4B QLoRA 最小环已跑通）
 - [x] Best-of-N 基线（extraction，脚本与 smoke 跑通）
 - [~] DPO 闭环（最小训练环已打通，主实验待真实数据）
 - [ ] GRPO 对比（次要）
@@ -390,10 +390,14 @@
 - `reports/stage52_synth_dataset_4b_20260225_v1/dataset.jsonl`
 - `reports/stage52_synth_pairs_4b_20260225_v1/stage52_synth_pairs_summary.md`
 - `reports/stage52_dpo_min_4b_20260225_synth_v1_len128/stage52_dpo_summary.md`
+- `reports/stage52_sft_min_4b_20260225_qlora_v1/stage52_sft_summary.md`
+- `reports/stage52_best_of_n_4b_base_20260225_synth_v2_small/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260225_synth_v2_small/stage52_summary.json`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
-- Qwen3-4B SFT 在当前 11GB 显存卡上即使 `max_length=64` 仍 OOM（backward 阶段，申请额外 ~48MiB 失败），后续需要 QLoRA/多卡/更大显存方案再补 4B 对齐结果。
+- Qwen3-4B FP16 SFT 在 11GB 显存卡上 OOM；已通过 QLoRA（4bit）路径跑通最小环：`max_steps=1`, `max_length=64`, `training_loss=4.0052`。
+- 当前 synthetic extraction 数据难度偏低，4B base 与 4B+SFT(QLoRA) 在 `max_samples=8, best-of-4` 下指标均为 `1.0`，暂不具区分度；后续需更难数据或更严格 verifier 才能形成有效 baseline 对比。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。

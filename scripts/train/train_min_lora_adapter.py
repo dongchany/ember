@@ -34,6 +34,11 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--lora-alpha", type=int, default=16)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
     ap.add_argument("--target-modules", type=str, default="q_proj,k_proj,v_proj,o_proj")
+    ap.add_argument("--load-in-4bit", action="store_true", default=False, help="enable QLoRA-style 4-bit base loading")
+    ap.add_argument("--bnb-4bit-compute-dtype", type=str, default="float16", choices=["float16", "bfloat16", "float32"])
+    ap.add_argument("--bnb-4bit-quant-type", type=str, default="nf4", choices=["nf4", "fp4"])
+    ap.add_argument("--bnb-4bit-use-double-quant", action="store_true", default=True)
+    ap.add_argument("--no-bnb-4bit-use-double-quant", dest="bnb_4bit_use_double_quant", action="store_false")
     ap.add_argument("--trust-remote-code", action="store_true", default=True)
     ap.add_argument("--no-trust-remote-code", dest="trust_remote_code", action="store_false")
     ap.add_argument("--save-tokenizer", action="store_true", default=True)
@@ -44,15 +49,27 @@ def parse_args() -> argparse.Namespace:
 def import_stack():
     try:
         import torch
-        from peft import LoraConfig, TaskType, get_peft_model
-        from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, set_seed
+        from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, Trainer, TrainingArguments, set_seed
     except Exception as ex:
         die(
             "missing Python deps. Install first, e.g.\n"
-            "  pip install torch transformers peft accelerate sentencepiece\n"
+            "  pip install torch transformers peft accelerate sentencepiece bitsandbytes\n"
             f"details: {ex}"
         )
-    return torch, LoraConfig, TaskType, get_peft_model, AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments, set_seed
+    return (
+        torch,
+        LoraConfig,
+        TaskType,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        Trainer,
+        TrainingArguments,
+        set_seed,
+    )
 
 
 def load_jsonl(path: Path) -> List[Dict[str, str]]:
@@ -157,8 +174,10 @@ def main() -> None:
         LoraConfig,
         TaskType,
         get_peft_model,
+        prepare_model_for_kbit_training,
         AutoModelForCausalLM,
         AutoTokenizer,
+        BitsAndBytesConfig,
         Trainer,
         TrainingArguments,
         set_seed,
@@ -181,20 +200,48 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if torch.cuda.is_available():
-        use_bf16 = torch.cuda.is_bf16_supported()
-        dtype = torch.bfloat16 if use_bf16 else torch.float16
+    if args.load_in_4bit:
+        if not torch.cuda.is_available():
+            die("--load-in-4bit requires CUDA")
+        if args.bnb_4bit_compute_dtype == "float16":
+            bnb_compute_dtype = torch.float16
+            use_bf16 = False
+        elif args.bnb_4bit_compute_dtype == "bfloat16":
+            bnb_compute_dtype = torch.bfloat16
+            use_bf16 = True
+        else:
+            bnb_compute_dtype = torch.float32
+            use_bf16 = False
+        bnb_cfg = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type=args.bnb_4bit_quant_type,
+            bnb_4bit_compute_dtype=bnb_compute_dtype,
+            bnb_4bit_use_double_quant=args.bnb_4bit_use_double_quant,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            trust_remote_code=args.trust_remote_code,
+            quantization_config=bnb_cfg,
+            device_map="auto",
+        )
+        model.config.use_cache = False
+        model.gradient_checkpointing_enable()
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
     else:
-        use_bf16 = False
-        dtype = torch.float32
+        if torch.cuda.is_available():
+            use_bf16 = torch.cuda.is_bf16_supported()
+            dtype = torch.bfloat16 if use_bf16 else torch.float16
+        else:
+            use_bf16 = False
+            dtype = torch.float32
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model,
-        trust_remote_code=args.trust_remote_code,
-        torch_dtype=dtype,
-    )
-    model.config.use_cache = False
-    model.gradient_checkpointing_enable()
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            trust_remote_code=args.trust_remote_code,
+            torch_dtype=dtype,
+        )
+        model.config.use_cache = False
+        model.gradient_checkpointing_enable()
 
     lora_cfg = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -303,6 +350,10 @@ def main() -> None:
         "lora_alpha": args.lora_alpha,
         "lora_dropout": args.lora_dropout,
         "target_modules": [x.strip() for x in args.target_modules.split(",") if x.strip()],
+        "load_in_4bit": args.load_in_4bit,
+        "bnb_4bit_compute_dtype": args.bnb_4bit_compute_dtype,
+        "bnb_4bit_quant_type": args.bnb_4bit_quant_type,
+        "bnb_4bit_use_double_quant": args.bnb_4bit_use_double_quant,
         "training_loss": float(result.training_loss) if result is not None else None,
     }
     (run_dir / "train_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
