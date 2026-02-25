@@ -3,9 +3,9 @@ import argparse
 import csv
 import datetime as dt
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from common_report import die, read_csv
+from common_report import die, read_csv, safe_float
 
 
 def size_of_safetensors_bytes(dir_path: Path) -> int:
@@ -20,6 +20,37 @@ def to_gib(x: int) -> float:
     return float(x) / (1024.0 ** 3)
 
 
+def pick_rollout_tok_s(
+    framework_csv: Path,
+    engine: str,
+    scenario: str,
+) -> Dict[str, str]:
+    rows = read_csv(framework_csv)
+    if not rows:
+        die(f"empty framework compare csv: {framework_csv}")
+    engine_l = engine.strip().lower()
+    scenario_l = scenario.strip().lower()
+    cands: List[Dict[str, str]] = []
+    for r in rows:
+        if str(r.get("status", "")).strip().lower() != "ok":
+            continue
+        if str(r.get("engine", "")).strip().lower() != engine_l:
+            continue
+        if scenario_l and str(r.get("scenario", "")).strip().lower() != scenario_l:
+            continue
+        cands.append(r)
+    if not cands:
+        die(
+            f"no matched row in framework csv for engine='{engine}' scenario='{scenario}'. "
+            f"file={framework_csv}"
+        )
+    best = max(cands, key=lambda r: safe_float(r.get("rollout_tok_s", "0")))
+    tok_s = safe_float(best.get("rollout_tok_s", "0"))
+    if tok_s <= 0:
+        die(f"invalid rollout_tok_s in matched row: {best}")
+    return best
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Stage 5.3 unified-backend advantage summary.")
     ap.add_argument("--model-dir", type=str, required=True)
@@ -27,6 +58,12 @@ def main() -> None:
     ap.add_argument("--adapter-dir", type=str, default="")
     ap.add_argument("--num-rounds", type=int, default=30)
     ap.add_argument("--pcie-bandwidth-gbps", type=float, default=24.0, help="effective host<->device GB/s")
+    ap.add_argument("--framework-compare-csv", type=str, default="", help="optional framework_compare.csv for rollout tok/s")
+    ap.add_argument("--rollout-engine", type=str, default="ember")
+    ap.add_argument("--rollout-scenario", type=str, default="dual(0,1)")
+    ap.add_argument("--num-prompts", type=int, default=100)
+    ap.add_argument("--num-candidates", type=int, default=8)
+    ap.add_argument("--decode-steps", type=int, default=128)
     ap.add_argument("--out-dir", type=str, default="")
     args = ap.parse_args()
 
@@ -34,6 +71,8 @@ def main() -> None:
         die("--num-rounds must be > 0")
     if args.pcie_bandwidth_gbps <= 0:
         die("--pcie-bandwidth-gbps must be > 0")
+    if args.num_prompts <= 0 or args.num_candidates <= 0 or args.decode_steps <= 0:
+        die("--num-prompts/--num-candidates/--decode-steps must be > 0")
 
     model_dir = Path(args.model_dir).expanduser().resolve()
     hot_csv = Path(args.hot_update_csv).expanduser().resolve()
@@ -73,6 +112,18 @@ def main() -> None:
     total_full_sync_ms = full_sync_ms * args.num_rounds
     total_lora_sync_ms = lora_sync_ms * args.num_rounds
     total_hot_update_ms = measured_hot_update_ms * args.num_rounds
+
+    framework_csv: Optional[Path] = None
+    rollout_row: Optional[Dict[str, str]] = None
+    if args.framework_compare_csv.strip():
+        framework_csv = Path(args.framework_compare_csv).expanduser().resolve()
+        if not framework_csv.exists():
+            die(f"framework-compare-csv not found: {framework_csv}")
+        rollout_row = pick_rollout_tok_s(
+            framework_csv=framework_csv,
+            engine=args.rollout_engine,
+            scenario=args.rollout_scenario,
+        )
 
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else (Path.cwd() / "reports" / f"stage53_unified_backend_advantage_{ts}")
@@ -138,6 +189,74 @@ def main() -> None:
         },
     ]
 
+    if rollout_row is not None:
+        rollout_tok_s = safe_float(rollout_row.get("rollout_tok_s", "0"))
+        rollout_tokens_per_round = float(args.num_prompts * args.num_candidates * args.decode_steps)
+        rollout_ms_per_round = (rollout_tokens_per_round / rollout_tok_s * 1000.0) if rollout_tok_s > 0 else 0.0
+        dual_full_round_ms = rollout_ms_per_round + full_sync_ms
+        dual_lora_round_ms = rollout_ms_per_round + lora_sync_ms
+        unified_round_ms = rollout_ms_per_round + measured_hot_update_ms
+        dual_full_tok_s_e2e = (rollout_tokens_per_round / dual_full_round_ms * 1000.0) if dual_full_round_ms > 0 else 0.0
+        dual_lora_tok_s_e2e = (rollout_tokens_per_round / dual_lora_round_ms * 1000.0) if dual_lora_round_ms > 0 else 0.0
+        unified_tok_s_e2e = (rollout_tokens_per_round / unified_round_ms * 1000.0) if unified_round_ms > 0 else 0.0
+        speedup_vs_dual_full = (dual_full_round_ms / unified_round_ms) if unified_round_ms > 0 else 0.0
+        speedup_vs_dual_lora = (dual_lora_round_ms / unified_round_ms) if unified_round_ms > 0 else 0.0
+
+        summary_rows.extend(
+            [
+                {
+                    "metric": "e2e_rollout_tok_s_source",
+                    "value": f"{rollout_tok_s:.6f}",
+                    "notes": f"{rollout_row.get('engine','')}/{rollout_row.get('scenario','')} from framework csv",
+                },
+                {
+                    "metric": "e2e_rollout_tokens_per_round",
+                    "value": f"{rollout_tokens_per_round:.0f}",
+                    "notes": f"num_prompts={args.num_prompts}, num_candidates={args.num_candidates}, decode_steps={args.decode_steps}",
+                },
+                {
+                    "metric": "e2e_dual_fullsync_round_ms_est",
+                    "value": f"{dual_full_round_ms:.6f}",
+                    "notes": "rollout + full model sync",
+                },
+                {
+                    "metric": "e2e_unified_round_ms_est",
+                    "value": f"{unified_round_ms:.6f}",
+                    "notes": "rollout + measured in-process hot update",
+                },
+                {
+                    "metric": "e2e_dual_fullsync_tok_s_est",
+                    "value": f"{dual_full_tok_s_e2e:.6f}",
+                    "notes": "end-to-end throughput",
+                },
+                {
+                    "metric": "e2e_unified_tok_s_est",
+                    "value": f"{unified_tok_s_e2e:.6f}",
+                    "notes": "end-to-end throughput",
+                },
+                {
+                    "metric": "e2e_unified_speedup_vs_dual_fullsync_x",
+                    "value": f"{speedup_vs_dual_full:.6f}",
+                    "notes": "round-time ratio",
+                },
+                {
+                    "metric": "e2e_dual_lora_sync_round_ms_est",
+                    "value": f"{dual_lora_round_ms:.6f}",
+                    "notes": "rollout + LoRA-size sync estimate",
+                },
+                {
+                    "metric": "e2e_dual_lora_sync_tok_s_est",
+                    "value": f"{dual_lora_tok_s_e2e:.6f}",
+                    "notes": "end-to-end throughput",
+                },
+                {
+                    "metric": "e2e_unified_speedup_vs_dual_lora_sync_x",
+                    "value": f"{speedup_vs_dual_lora:.6f}",
+                    "notes": "round-time ratio",
+                },
+            ]
+        )
+
     with out_csv.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["metric", "value", "notes"])
         w.writeheader()
@@ -145,7 +264,7 @@ def main() -> None:
             w.writerow(r)
 
     lines = [
-        "# Stage 5.3 Unified Backend Advantage (Memory + Sync)",
+        "# Stage 5.3 Unified Backend Advantage (Memory + Sync + E2E)",
         "",
         f"- Generated at: `{dt.datetime.now().isoformat(timespec='seconds')}`",
         f"- Model dir: `{model_dir}`",

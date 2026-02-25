@@ -370,17 +370,19 @@
 
 ### 5.2 训练基线
 
-- [ ] SFT 基线（HF + PEFT LoRA SFT）
+- [~] SFT 基线（HF + PEFT LoRA SFT；0.6B 已跑通，4B 受显存约束）
 - [x] Best-of-N 基线（extraction，脚本与 smoke 跑通）
 - [~] DPO 闭环（最小训练环已打通，主实验待真实数据）
 - [ ] GRPO 对比（次要）
 
 **新增产出（2026-02-25）：**
 - `scripts/train/build_stage52_synth_extraction_dataset.py`
+- `scripts/train/run_stage52_sft_min.py`
 - `scripts/train/run_stage52_best_of_n_extraction.py`
 - `scripts/train/run_stage52_build_dpo_pairs.py`
 - `scripts/train/run_stage52_build_synthetic_pairs_from_gold.py`
 - `scripts/train/run_stage52_dpo_min.py`
+- `reports/stage52_sft_min_06b_20260225_synth_v4/stage52_sft_summary.md`
 - `reports/stage52_best_of_n_smoke_20260225/out/stage52_summary.md`
 - `reports/stage52_best_of_n_smoke_20260225/out_short/stage52_summary.md`
 - `reports/stage52_dpo_pairs_smoke_20260225/out/stage52_dpo_pairs_summary.md`
@@ -390,6 +392,8 @@
 - `reports/stage52_dpo_min_4b_20260225_synth_v1_len128/stage52_dpo_summary.md`
 
 **备注：**
+- SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
+- Qwen3-4B SFT 在当前 11GB 显存卡上即使 `max_length=64` 仍 OOM（backward 阶段，申请额外 ~48MiB 失败），后续需要 QLoRA/多卡/更大显存方案再补 4B 对齐结果。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
@@ -398,16 +402,18 @@
 
 - [x] 双栈 vs 统一后端显存对比（model-only 视角）
 - [x] 权重同步开销 vs 原地热更新延迟（transfer estimate + measured hot-update）
-- [ ] 端到端 rollout+update 吞吐对比
+- [~] 端到端 rollout+update 吞吐对比（当前为估算版，实测闭环待补）
 
 **新增产出（2026-02-25）：**
 - `scripts/report/run_stage53_unified_backend_advantage.py`
 - `reports/stage53_unified_backend_advantage_4b_20260225_mainline_v1/stage53_summary.md`
+- `reports/stage53_unified_backend_advantage_4b_20260225_mainline_v2/stage53_summary.md`
 
 **当前可引用数字（Qwen3-4B, 30 轮）：**
 - 模型权重 footprint：dual-stack `14.985 GiB` vs unified `7.492 GiB`（节省 `50%`）
 - 全量权重同步估算：`312.186 ms/round`（30 轮 `9365.592 ms`）
 - 实测原地热更新：`28.206 ms/round`（30 轮 `846.180 ms`）
+- E2E 吞吐估算（rollout-heavy: 100×8×128, rollout tok/s=47.586）：unified vs dual-fullsync `1.000132x`（几乎无差异，说明该配置下同步并非吞吐主瓶颈）
 
 ---
 
