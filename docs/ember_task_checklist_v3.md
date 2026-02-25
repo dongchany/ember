@@ -144,6 +144,11 @@
 - `reports/stage31_lora_hot_update_4b_20260225_replace_mainline/stage31_summary.md`
 - `reports/stage31_lora_numeric_align_4b_20260225_synth_mainline/stage31_lora_numeric_align.csv`
 - `reports/stage31_lora_numeric_align_4b_20260225_synth_bf16/stage31_lora_numeric_align.csv`
+- `reports/adapters/qwen3_4b_peft_init_r8_20260225/`（真实 PEFT init adapter，zero-step）
+- `reports/adapters/qwen3_4b_peft_perturb_r8_20260225/`（真实 PEFT 非零扰动 adapter）
+- `reports/stage31_lora_numeric_align_4b_20260225_peft_init_mainline/stage31_lora_numeric_align.csv`
+- `reports/stage31_lora_numeric_align_4b_20260225_peft_perturb_peftref/stage31_lora_numeric_align.csv`
+- `reports/stage31_lora_numeric_align_4b_20260225_peft_diag/stage31_diag_summary.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -151,7 +156,9 @@
 - 稳态（iters=3, warmup=1）：`28.206 ms`
 - 热替换稳态（iters=3, warmup=1, replace_existing=1）：`51.538 ms`
 - 本次更新矩阵数：增量 merge `144`；热替换（回滚+应用）`288`
-- LoRA numeric align（synthetic adapter, fp16 HF）：`delta_max_abs_diff=0.67611670`（未达 `1e-4`，该项继续 pending）
+- LoRA numeric align（真实 PEFT init adapter, zero-update）：`delta_max_abs_diff=0.00000000`（通过 `1e-4`）
+- LoRA numeric align（真实 PEFT 非零扰动 adapter）：`delta_max_abs_diff=0.26039124`（未通过 `1e-4`，该项继续 pending）
+- 单模块扰动诊断：`q=0.35316205`, `k=0.24981344`, `v=0.31881905`, `o=0.38927269`（均未通过）
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 

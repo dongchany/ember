@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import gc
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -118,12 +119,29 @@ def apply_lora_inplace_hf(model: AutoModelForCausalLM, adapter_dir: Path, lora_s
     return updated
 
 
+def count_complete_lora_pairs(adapter_dir: Path) -> int:
+    safepath = adapter_dir / "adapter_model.safetensors"
+    if not safepath.exists():
+        return 0
+    tensors = load_file(str(safepath), device="cpu")
+    pairs: Dict[Tuple[int, str], Dict[str, bool]] = {}
+    for name in tensors.keys():
+        m = PAIR_RE.search(name)
+        if not m:
+            continue
+        key = (int(m.group(1)), m.group(2))
+        if key not in pairs:
+            pairs[key] = {}
+        pairs[key][m.group(3)] = True
+    return sum(1 for _, d in pairs.items() if d.get("A") and d.get("B"))
+
+
 def hf_last_logits(
     model_dir: Path,
     tokens: List[int],
     device: str,
     dtype: str,
-) -> torch.Tensor:
+) -> Tuple[AutoModelForCausalLM, torch.Tensor]:
     if not tokens:
         die("empty token list for HF inference")
     if dtype == "float16":
@@ -145,6 +163,46 @@ def hf_last_logits(
         out = model(input_ids, use_cache=False)
         logits_base = out.logits[0, -1].float().cpu()
     return model, logits_base
+
+
+def hf_lora_logits_peft(
+    model_dir: Path,
+    adapter_dir: Path,
+    tokens: List[int],
+    device: str,
+    dtype: str,
+) -> torch.Tensor:
+    try:
+        from peft import PeftModel  # type: ignore
+    except Exception as ex:
+        die(f"peft is required for HF LoRA reference path: {ex}")
+
+    if dtype == "float16":
+        tdtype = torch.float16
+    elif dtype == "bfloat16":
+        tdtype = torch.bfloat16
+    else:
+        tdtype = torch.float32
+
+    model = AutoModelForCausalLM.from_pretrained(
+        str(model_dir),
+        trust_remote_code=True,
+        local_files_only=True,
+        torch_dtype=tdtype,
+    )
+    model.eval()
+    model.to(device)
+    peft_model = PeftModel.from_pretrained(model, str(adapter_dir), is_trainable=False)
+    peft_model.eval()
+    input_ids = torch.tensor([tokens], dtype=torch.long, device=device)
+    with torch.no_grad():
+        out = peft_model(input_ids, use_cache=False)
+        logits_lora = out.logits[0, -1].float().cpu()
+    del peft_model
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+    return logits_lora
 
 
 def compute_diff(a: torch.Tensor, b: torch.Tensor) -> Tuple[float, float]:
@@ -264,11 +322,20 @@ def main() -> None:
         device=args.hf_device,
         dtype=args.hf_dtype,
     )
-    updated = apply_lora_inplace_hf(model, adapter_dir=adapter_dir, lora_scale=args.lora_scale)
-    with torch.no_grad():
-        input_ids = torch.tensor([tokens_base], dtype=torch.long, device=args.hf_device)
-        out = model(input_ids, use_cache=False)
-        hf_lora = out.logits[0, -1].float().cpu()
+    del model
+    torch.cuda.empty_cache()
+    gc.collect()
+
+    # HF LoRA reference: prefer PEFT forward path for exact adapter semantics.
+    hf_lora = hf_lora_logits_peft(
+        model_dir=model_dir,
+        adapter_dir=adapter_dir,
+        tokens=tokens_base,
+        device=args.hf_device,
+        dtype=args.hf_dtype,
+    )
+
+    updated = count_complete_lora_pairs(adapter_dir)
     hf_delta = hf_lora - hf_base
 
     base_max, base_mean = compute_diff(hf_base, ember_base)
@@ -282,6 +349,7 @@ def main() -> None:
         "mode": "stage31_lora_numeric_align",
         "model_dir": str(model_dir),
         "adapter_dir": str(adapter_dir),
+        "hf_lora_ref": "peft_forward",
         "prompt": args.prompt,
         "devices": args.devices,
         "hf_device": args.hf_device,
