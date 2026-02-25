@@ -379,6 +379,7 @@
 - `scripts/train/build_stage52_synth_extraction_dataset.py`
 - `scripts/train/run_stage52_sft_min.py`
 - `scripts/train/run_stage52_best_of_n_extraction.py`
+- `scripts/report/run_stage52_baseline_compare.py`
 - `scripts/train/run_stage52_build_dpo_pairs.py`
 - `scripts/train/run_stage52_build_synthetic_pairs_from_gold.py`
 - `scripts/train/run_stage52_dpo_min.py`
@@ -393,11 +394,26 @@
 - `reports/stage52_sft_min_4b_20260225_qlora_v1/stage52_sft_summary.md`
 - `reports/stage52_best_of_n_4b_base_20260225_synth_v2_small/stage52_summary.json`
 - `reports/stage52_best_of_n_4b_sftqlora_20260225_synth_v2_small/stage52_summary.json`
+- `reports/stage52_synth_dataset_4b_20260226_hardrule_v1/dataset.jsonl`
+- `reports/stage52_sft_min_4b_20260226_hardrule_qlora_v2/stage52_sft_summary.md`
+- `reports/stage52_best_of_n_4b_base_20260226_hardrule_v1_n1_32/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_base_20260226_hardrule_v1_n4_32/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_hardrule_v1_n1_32/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_hardrule_v1_n4_32/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_hardrule_v2_n1_32/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_hardrule_v2_n4_32/stage52_summary.json`
+- `reports/stage52_synth_pairs_4b_20260226_hardrule_v1/stage52_synth_pairs_summary.md`
+- `reports/stage52_dpo_min_4b_20260226_hardrule_v1_len96/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_hardrule_v1_n1_32/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_hardrule_v1/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
 - Qwen3-4B FP16 SFT 在 11GB 显存卡上 OOM；已通过 QLoRA（4bit）路径跑通最小环：`max_steps=1`, `max_length=64`, `training_loss=4.0052`。
 - 当前 synthetic extraction 数据难度偏低，4B base 与 4B+SFT(QLoRA) 在 `max_samples=8, best-of-4` 下指标均为 `1.0`，暂不具区分度；后续需更难数据或更严格 verifier 才能形成有效 baseline 对比。
+- 已引入 `hard_rule` 难度（active 过滤 + score 排序 + 日期 tie-break）后，4B base 在 `max_samples=32` 上降到 `pass@1=0.84375`（不再饱和），`best-of-4` 升至 `pass@4=0.875`。
+- 新的 QLoRA 训练（v2：`max_steps=12`, `max_length=128`, `max_train_samples=32`）得到 `training_loss=2.2477`，并将 `pass@1` 提升到 `0.875`（相对 base `+3.125pp`）；该配置下 `N=4` 未进一步提升（仍 `0.875`）。
+- DPO 最小环（hard_rule synthetic pairs，`max_steps=12`, `max_length=96`, `reference_mode=none`）已复跑并成功收敛训练日志，但在同口径 `N=1` 评估下暂未超过 base（`pass@1=0.84375`），后续需提升 pair 难度/质量与 reference 配置。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
