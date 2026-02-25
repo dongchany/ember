@@ -142,6 +142,7 @@
 - `scripts/report/run_stage31_lora_numeric_align.py`
 - `benchmarks/lora_weight_merge_check.cpp`
 - `scripts/report/run_stage31_lora_weight_merge_check.py`
+- `scripts/report/run_stage31_lora_delta_profile.py`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline/stage31_summary.md`
 - `reports/stage31_lora_hot_update_4b_20260225_mainline_avg/stage31_lora_hot_update.csv`
 - `reports/stage31_lora_hot_update_4b_20260225_replace_mainline/stage31_summary.md`
@@ -154,6 +155,7 @@
 - `reports/stage31_lora_numeric_align_4b_20260225_peft_diag/stage31_diag_summary.csv`
 - `reports/stage31_lora_weight_merge_check_4b_20260225_peft_perturb_layer0_mainline/stage31_lora_weight_merge_check.csv`
 - `reports/stage31_lora_weight_merge_check_4b_20260225_peft_perturb_layer35_q_mainline/stage31_lora_weight_merge_check.csv`
+- `reports/stage31_lora_delta_profile_4b_20260225_peft_perturb_mainline/stage31_lora_delta_profile.csv`
 - `reports/synthetic_lora_qwen3_4b_r8/`（形状匹配的 synthetic adapter，用于路径验证）
 
 **当前可引用数字（Qwen3-4B, 2x3080Ti, split=9+27）：**
@@ -166,6 +168,7 @@
 - 单模块扰动诊断：`q=0.35316205`, `k=0.24981344`, `v=0.31881905`, `o=0.38927269`（均未通过）
 - LoRA 权重空间校验（真实 PEFT 非零扰动）：layer0 `q/k/v/o` 的 `delta_max_abs_diff ≈ 2.43e-4`；layer35 `q_proj=3.03e-4`
 - LoRA 权重空间校验（双卡 split=18+18 抽检）：layer18 `q_proj delta_max_abs_diff=2.597e-4`
+- LoRA delta 逐层剖析（非零扰动）：`layer_0=0.03125`，`layer_24=0.25`，`layer_32=1.75`，`layer_35=2.000267`（误差随深度放大）
 
 **解锁：** 3.3 cache 策略接口中的 UpdateLocality、多轮累积实验
 
