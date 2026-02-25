@@ -255,6 +255,13 @@ target_link_libraries(ember_lora_weight_merge_check PRIVATE
     ember_infer
 )
 
+add_executable(ember_rollout_update_loop_benchmark
+    benchmarks/rollout_update_loop_benchmark.cpp
+)
+target_link_libraries(ember_rollout_update_loop_benchmark PRIVATE
+    ember_infer
+)
+
 add_executable(ember_serve_benchmark
     benchmarks/serve_benchmark.cpp
 )

@@ -402,18 +402,26 @@
 
 - [x] 双栈 vs 统一后端显存对比（model-only 视角）
 - [x] 权重同步开销 vs 原地热更新延迟（transfer estimate + measured hot-update）
-- [~] 端到端 rollout+update 吞吐对比（当前为估算版，实测闭环待补）
+- [~] 端到端 rollout+update 吞吐对比（unified 闭环实测已完成；dual-stack 侧仍为 sync-sim）
 
 **新增产出（2026-02-25）：**
+- `benchmarks/rollout_update_loop_benchmark.cpp`
+- `scripts/report/run_stage53_e2e_loop_compare.py`
 - `scripts/report/run_stage53_unified_backend_advantage.py`
 - `reports/stage53_unified_backend_advantage_4b_20260225_mainline_v1/stage53_summary.md`
 - `reports/stage53_unified_backend_advantage_4b_20260225_mainline_v2/stage53_summary.md`
+- `reports/stage53_e2e_loop_compare_4b_20260225_mainline_v1/stage53_e2e_compare.md`
 
 **当前可引用数字（Qwen3-4B, 30 轮）：**
 - 模型权重 footprint：dual-stack `14.985 GiB` vs unified `7.492 GiB`（节省 `50%`）
 - 全量权重同步估算：`312.186 ms/round`（30 轮 `9365.592 ms`）
 - 实测原地热更新：`28.206 ms/round`（30 轮 `846.180 ms`）
 - E2E 吞吐估算（rollout-heavy: 100×8×128, rollout tok/s=47.586）：unified vs dual-fullsync `1.000132x`（几乎无差异，说明该配置下同步并非吞吐主瓶颈）
+- E2E 闭环实测（512/64, candidates=4, rounds=6,warmup=2）：
+  - `unified_apply`: `update_ms_ext_avg=42.666`, `e2e_tok_s=84.720`
+  - `dual_fullsync_sim`: `round_ms_avg=3301.325`, `e2e_tok_s=77.545`
+  - `dual_lora_sync_sim`: `round_ms_avg=2982.843`, `e2e_tok_s=85.824`
+  - 结论：unified vs dual_fullsync(sim) `1.0925x`；vs dual_lora_sync(sim) `0.9871x`
 
 ---
 
