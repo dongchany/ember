@@ -220,6 +220,20 @@ target_link_libraries(ember_stage_breakdown PRIVATE
     ember_infer
 )
 
+add_executable(ember_prefix_cache_benchmark
+    benchmarks/prefix_cache_benchmark.cpp
+)
+target_link_libraries(ember_prefix_cache_benchmark PRIVATE
+    ember_infer
+)
+
+add_executable(ember_lora_hot_update_benchmark
+    benchmarks/lora_hot_update_benchmark.cpp
+)
+target_link_libraries(ember_lora_hot_update_benchmark PRIVATE
+    ember_infer
+)
+
 add_executable(ember_serve_benchmark
     benchmarks/serve_benchmark.cpp
 )

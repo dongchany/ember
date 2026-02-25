@@ -96,6 +96,13 @@ public:
         float total_ms = 0.0f;
     };
 
+    struct LoraApplyStats {
+        int updated_matrices = 0;
+        int skipped_matrices = 0;
+        float scale_used = 0.0f;
+        float wall_ms = 0.0f;
+    };
+
     CudaRuntime();
     ~CudaRuntime() override;
     
@@ -109,6 +116,12 @@ public:
     Error prefill(const std::vector<int>& tokens, Session& session) override;
     Error prefill_with_logits(const std::vector<int>& tokens, Session& session, std::vector<float>& logits) override;
     Error decode(int last_token, Session& session, std::vector<float>& logits) override;
+
+    // Merge a PEFT LoRA adapter into current attention projection weights in-place.
+    // Supported targets: self_attn.{q_proj,k_proj,v_proj,o_proj}.
+    Error apply_lora_adapter(const std::string& adapter_dir,
+                             float scale = 1.0f,
+                             LoraApplyStats* stats = nullptr);
     
     MemoryEstimate estimate_memory(const ModelConfig& config, 
                                    int ctx_len, int batch_size) override;
