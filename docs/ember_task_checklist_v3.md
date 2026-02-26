@@ -439,8 +439,16 @@
 - `reports/stage52_dpo_min_4b_20260226_external_zip22_v3_tuned_len96/stage52_dpo_summary.md`
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v3_tuned_n1_100_forcejson_sample/stage52_summary.json`
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v3_tuned_n4_100_forcejson_sample/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v3_tuned_n2_100_forcejson_sample_gpu1/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_with_dpo_v3_v2/stage52_baseline_compare.md`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v1/stage52_baseline_compare.md`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_train200_n4_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_dpo_pairs_4b_20260226_external_zip22_train200_sftn4_margin008_v1/stage52_dpo_pairs_summary.md`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v4_hardpair_train200_len96_gpu1/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v4_hardpair_n1_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v4_hardpair_n4_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v2/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_dpo_v3_v4_v2/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -472,8 +480,15 @@
   - 结论：SFT 在 best-of-n 维度有明显可挖掘余量，适合用于“pass@k 转 pass@1”叙事支撑。
 - DPO(v3, tuned: `steps=80`, `lr=5e-5`, `reference=none`)：
   - N=1: `mean_reward_best=0.2044`, `pass@1=0.01`
+  - N=2: `mean_reward_best=0.2058`, `pass@N=0.01`（GPU1 复跑）
   - N=4: `mean_reward_best=0.2215`, `pass@N=0.02`
   - 对比：`mean_reward` 高于 base（0.1997），但 `pass@N` 未超 base；说明“字段级部分正确率”改善，但“全字段完全正确”尚未突破。
+- DPO(v4, hard-pair mined from SFT train candidates)：
+  - 先在 external train(200) 上跑 SFT `N=4` 候选，再用 `min_margin=0.08` 构造 DPO pairs（`141` 对，avg margin=`0.4037`）
+  - 训练：`steps=120`, `lr=2e-5`, `reference=none`, `max_length=96`（GPU1）
+  - N=1(test100): `mean_reward_best=0.2610`, `pass@1=0.02`
+  - N=4(test100): `mean_reward_best=0.2807`, `pass@N=0.02`
+  - 结论：hard-pair 显著提升字段级 reward（较 v3/base 均提升），并保持 `pass@1` 与 base 持平；目前仍未超过 `pass@N` 的绝对上限。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
