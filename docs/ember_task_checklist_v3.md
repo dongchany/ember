@@ -383,6 +383,7 @@
 - `scripts/report/run_stage52_baseline_compare.py`
 - `scripts/train/run_stage52_build_dpo_pairs.py`
 - `scripts/train/run_stage52_build_synthetic_pairs_from_gold.py`
+- `scripts/train/run_stage52_build_dpo_pairs_oracle_exact.py`
 - `scripts/train/run_stage52_dpo_min.py`
 - `reports/stage52_sft_min_06b_20260225_synth_v4/stage52_sft_summary.md`
 - `reports/stage52_best_of_n_smoke_20260225/out/stage52_summary.md`
@@ -449,6 +450,41 @@
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v4_hardpair_n4_100_forcejson_sample_gpu1/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v2/stage52_baseline_compare.md`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_dpo_v3_v4_v2/stage52_baseline_compare.md`
+- `reports/stage52_dpo_pairs_4b_20260226_external_zip22_train400_sftn4_margin008_v1/stage52_dpo_pairs_summary.md`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v5_hardpair_train400_len96_gpu1/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_hardpair_n1_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_hardpair_n2_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_hardpair_n4_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_dpo_v3_v4_v5_v1/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v3/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_bestofn_curve_with_dpo_v5_v1/stage52_baseline_compare.md`
+- `reports/stage52_dpo_pairs_4b_20260226_external_zip22_train400_oracle_exact_sftn4_v1/stage52_dpo_pairs_summary.md`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v6_oracle_exact_train400_len96_gpu1/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v6_oracle_exact_n1_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v6_oracle_exact_n4_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v7_initv5_oracle_exact_train400_len96_gpu1/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_initv5_oracle_exact_n1_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_initv5_oracle_exact_n2_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_initv5_oracle_exact_n4_100_forcejson_sample_gpu1/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_dpo_v3_v4_v5_v6_v7_v1/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v5/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_bestofn_curve_with_dpo_v5_v7_v1/stage52_baseline_compare.md`
+- `reports/stage52_best_of_n_4b_base_20260226_external_zip22_n1_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n1_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_n1_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_n1_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_schemahint_effect_v1/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_schemahint_core_v1/stage52_baseline_compare.md`
+- `reports/stage52_best_of_n_4b_base_20260226_external_zip22_n2_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_base_20260226_external_zip22_n4_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n2_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n4_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_n2_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v5_n4_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_n2_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v7_n4_100_forcejson_schemahint_sample_gpu1/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_base_sft_schemahint_curve_v1/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_schemahint_full_curve_v1/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -489,6 +525,39 @@
   - N=1(test100): `mean_reward_best=0.2610`, `pass@1=0.02`
   - N=4(test100): `mean_reward_best=0.2807`, `pass@N=0.02`
   - 结论：hard-pair 显著提升字段级 reward（较 v3/base 均提升），并保持 `pass@1` 与 base 持平；目前仍未超过 `pass@N` 的绝对上限。
+- DPO(v5, hard-pair mined from train400 SFT candidates)：
+  - 在 external train(400) 上汇总 SFT `N=4` 候选，`min_margin=0.08` 构造 DPO pairs（`271` 对，avg margin=`0.3923`）
+  - 训练：`steps=180`, `lr=2e-5`, `reference=none`, `max_length=96`（GPU1）
+  - N=1(test100): `mean_reward_best=0.3501`, `pass@1=0.02`
+  - N=2(test100): `mean_reward_best=0.3788`, `pass@N=0.02`
+  - N=4(test100): `mean_reward_best=0.3873`, `pass@N=0.02`
+  - 结论：在 `pass@1/pass@N` 不变的情况下，字段级 reward 再次显著提升（相对 v4 +0.0891 / +0.1067），说明 pair 质量/覆盖度提升有效。
+- DPO(v6, oracle-exact from base model + hard negative from SFT candidates)：
+  - `chosen=gold`，`rejected=该样本最高分 non-exact 候选`，train400 构造 `399` 对，avg margin=`0.5750`
+  - 训练：`steps=240`, `lr=1e-5`, `reference=none`, `max_length=96`（GPU1）
+  - N=1(test100): `mean_reward_best=0.2022`, `pass@1=0.02`
+  - N=4(test100): `mean_reward_best=0.2437`, `pass@N=0.02`
+  - 结论：纯 oracle-exact 路线在该设置下不优（reward 明显低于 v5），不建议单独采用。
+- DPO(v7, warm-start from v5 + oracle-exact continuation)：
+  - 训练实现新增 `run_stage52_dpo_min.py --init-adapter`（支持从已有 LoRA adapter 继续 DPO）
+  - 用 v5 adapter 热启动，在 v6 的 `399` 对 oracle-exact pairs 上续训：`steps=120`, `lr=5e-6`, `reference=none`
+  - N=1(test100): `mean_reward_best=0.3919`, `pass@1=0.02`
+  - N=2(test100): `mean_reward_best=0.4068`, `pass@N=0.02`
+  - N=4(test100): `mean_reward_best=0.4196`, `pass@N=0.02`
+  - 结论：v7 相对 v5 在字段级 reward 再提升（N=1 `+0.0418`，N=4 `+0.0323`），但 `pass@1/pass@N` 仍未突破 0.02。
+- 评估契约修正（schema-key-hint）：
+  - `run_stage52_best_of_n_extraction.py` 新增 `--schema-key-hint`，在 `force-json-output` 下把 schema 字段名契约显式写入 prompt（约束不要输出同义字段名）
+  - N=1(test100) 在同模型/同解码下出现显著提升：
+    - base: `pass@1 0.02 -> 0.23`, `mean_reward 0.1815 -> 0.6950`
+    - sft: `pass@1 0.01 -> 0.32`, `mean_reward 0.3268 -> 0.6960`
+    - dpo v5: `pass@1 0.02 -> 0.26`, `mean_reward 0.3501 -> 0.7124`
+    - dpo v7: `pass@1 0.02 -> 0.27`, `mean_reward 0.3919 -> 0.7150`
+  - N=1/2/4 曲线（schemahint, test100）已补齐：
+    - base: `pass@N 0.23 -> 0.25 -> 0.28`, `reward_best 0.6950 -> 0.7153 -> 0.7281`
+    - sft: `pass@N 0.32 -> 0.40 -> 0.51`, `reward_best 0.6960 -> 0.7481 -> 0.8026`
+    - dpo v5: `pass@N 0.26 -> 0.29 -> 0.34`, `reward_best 0.7124 -> 0.7239 -> 0.7441`
+    - dpo v7: `pass@N 0.27 -> 0.30 -> 0.31`, `reward_best 0.7150 -> 0.7277 -> 0.7405`
+  - 结论：此前 `pass` 长期卡在 `0.02` 的主要原因是“输出键名与评估 schema 键名不一致”，而非纯模型能力瓶颈；在 schemahint 口径下，当前最优方案是 SFT（pass 与 reward 均最高），DPO(v5/v7)在 reward 上提升但未超过 SFT。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。

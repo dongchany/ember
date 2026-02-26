@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from common_train import die, dtype_from_name, load_jsonl, render_chat, write_csv
@@ -103,6 +103,7 @@ def main() -> None:
     ap.add_argument("--model", type=str, required=True)
     ap.add_argument("--pairs-jsonl", type=str, required=True, help='rows: {"id","prompt","chosen","rejected"}')
     ap.add_argument("--output-dir", type=str, required=True)
+    ap.add_argument("--init-adapter", type=str, default="", help="optional PEFT adapter dir to continue DPO training from")
     ap.add_argument("--device", type=str, default="cuda:0")
     ap.add_argument("--dtype", type=str, default="float16", choices=["float16", "bfloat16", "float32"])
     ap.add_argument("--reference-mode", type=str, default="none", choices=["none", "cpu", "same_device"])
@@ -131,9 +132,13 @@ def main() -> None:
         torch.cuda.manual_seed_all(args.seed)
 
     model_dir = Path(args.model).expanduser().resolve()
+    init_adapter_dir = Path(args.init_adapter).expanduser().resolve() if args.init_adapter.strip() else None
     pairs_path = Path(args.pairs_jsonl).expanduser().resolve()
     out_dir = Path(args.output_dir).expanduser().resolve()
-    for p in [model_dir, pairs_path]:
+    required_paths = [model_dir, pairs_path]
+    if init_adapter_dir is not None:
+        required_paths.append(init_adapter_dir)
+    for p in required_paths:
         if not p.exists():
             die(f"missing path: {p}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -169,15 +174,18 @@ def main() -> None:
     base.to(args.device)
     base.train()
 
-    lora_cfg = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=[x.strip() for x in args.target_modules.split(",") if x.strip()],
-        bias="none",
-    )
-    policy = get_peft_model(base, lora_cfg)
+    if init_adapter_dir is not None:
+        policy = PeftModel.from_pretrained(base, str(init_adapter_dir), is_trainable=True)
+    else:
+        lora_cfg = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=args.lora_r,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            target_modules=[x.strip() for x in args.target_modules.split(",") if x.strip()],
+            bias="none",
+        )
+        policy = get_peft_model(base, lora_cfg)
     policy.train()
 
     ref_model, ref_device = maybe_load_ref_model(
@@ -296,6 +304,7 @@ def main() -> None:
         "num_pairs": len(tokenized),
         "max_steps": args.max_steps,
         "reference_mode": args.reference_mode,
+        "init_adapter": str(init_adapter_dir) if init_adapter_dir is not None else "",
         "loss_start": float(first["loss"]),
         "loss_end": float(last["loss"]),
         "win_rate_start": float(first["win_rate"]),
@@ -312,6 +321,7 @@ def main() -> None:
         f"- num_pairs: `{summary['num_pairs']}`",
         f"- steps: `{summary['max_steps']}`",
         f"- reference_mode: `{summary['reference_mode']}`",
+        f"- init_adapter: `{summary['init_adapter']}`",
         "",
         "| metric | value |",
         "| --- | --- |",

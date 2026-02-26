@@ -125,10 +125,21 @@ def evaluate_candidate(
     }
 
 
-def build_prompt(tokenizer, prompt: str, force_json_output: bool) -> str:
+def build_prompt(
+    tokenizer,
+    prompt: str,
+    force_json_output: bool,
+    schema_fields: Dict[str, str],
+    schema_key_hint: bool,
+) -> str:
     if force_json_output:
+        hint = ""
+        if schema_key_hint and schema_fields:
+            pairs = ", ".join(f"{k}({schema_fields[k]})" for k in sorted(schema_fields.keys()))
+            hint = f"字段名必须严格从以下列表中选择（不要使用同义词字段名）: {pairs}\n"
         prompt = (
             "请只输出一个合法 JSON 对象，不要输出解释、推理过程或代码块标记。\n"
+            f"{hint}"
             "如果某字段无法确定，请在 JSON 中省略该字段。\n\n"
             f"{prompt}"
         )
@@ -150,6 +161,12 @@ def main() -> None:
     ap.add_argument("--top-k", type=int, default=40)
     ap.add_argument("--decode-mode", type=str, default="sample", choices=["sample", "greedy"])
     ap.add_argument("--force-json-output", action="store_true", default=False)
+    ap.add_argument(
+        "--schema-key-hint",
+        action="store_true",
+        default=False,
+        help="inject explicit schema key contract into prompt when --force-json-output is enabled",
+    )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--reward-mode", type=str, default="weighted", choices=["binary", "weighted", "decomposed"])
     ap.add_argument("--max-samples", type=int, default=0)
@@ -238,7 +255,13 @@ def main() -> None:
         sid = str(sample["id"])
         prompt = str(sample["prompt"])
         gold = sample["gold"]
-        full_prompt = build_prompt(tokenizer, prompt, force_json_output=args.force_json_output)
+        full_prompt = build_prompt(
+            tokenizer,
+            prompt,
+            force_json_output=args.force_json_output,
+            schema_fields=schema_fields,
+            schema_key_hint=args.schema_key_hint,
+        )
         enc = tokenizer(full_prompt, return_tensors="pt")
         input_ids = enc["input_ids"].to(args.device)
         attn = enc["attention_mask"].to(args.device)
