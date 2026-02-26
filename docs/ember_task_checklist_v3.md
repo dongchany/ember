@@ -428,6 +428,9 @@
 - `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n4_100_forcejson/stage52_summary.json`
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v1_n4_100_forcejson/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_100_with_dpo_v1/stage52_baseline_compare.md`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v2_refcpu_len96/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v2_refcpu_n4_100_forcejson/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_100_with_dpo_v2/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -450,6 +453,9 @@
   - SFT: `mean_reward_best=0.4680`, `pass@N=0.0300`
   - DPO(v1, reference=none): `mean_reward_best=0.1997`, `pass@N=0.0200`
   - 结论：SFT 相对 base 有稳定提升；DPO(v1) 与 base 持平，未体现增益。
+- DPO(v2, `reference_mode=cpu`, steps=12, len=96) 复跑外部数据同口径评估（N=4, test=100）：
+  - `mean_reward_best=0.1997`, `pass@N=0.0200`（与 base、DPO(v1) 持平）
+  - 结论：当前 pair 构造与训练预算下，是否启用 reference 尚未带来可见收益；下一步优先提升 pair 质量/难度，而不是继续堆同配置训练步数。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
