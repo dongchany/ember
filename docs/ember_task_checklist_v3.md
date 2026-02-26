@@ -436,6 +436,11 @@
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v2_refcpu_n4_100_forcejson/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_100_with_dpo_v2/stage52_baseline_compare.md`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_bestofn_curve_v1/stage52_baseline_compare.md`
+- `reports/stage52_dpo_min_4b_20260226_external_zip22_v3_tuned_len96/stage52_dpo_summary.md`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v3_tuned_n1_100_forcejson_sample/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v3_tuned_n4_100_forcejson_sample/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n1_with_dpo_v3_v2/stage52_baseline_compare.md`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_all_dpo_variants_v1/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -465,6 +470,10 @@
   - base: `N=1/2/4 -> mean_reward_best 0.1815 / 0.1915 / 0.1997`（平缓上升，`pass@N` 固定 0.02）
   - SFT: `N=1/2/4 -> mean_reward_best 0.3268 / 0.3952 / 0.4680`（显著上升，`pass@N` 0.01 -> 0.02 -> 0.03）
   - 结论：SFT 在 best-of-n 维度有明显可挖掘余量，适合用于“pass@k 转 pass@1”叙事支撑。
+- DPO(v3, tuned: `steps=80`, `lr=5e-5`, `reference=none`)：
+  - N=1: `mean_reward_best=0.2044`, `pass@1=0.01`
+  - N=4: `mean_reward_best=0.2215`, `pass@N=0.02`
+  - 对比：`mean_reward` 高于 base（0.1997），但 `pass@N` 未超 base；说明“字段级部分正确率”改善，但“全字段完全正确”尚未突破。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。
