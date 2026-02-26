@@ -121,3 +121,14 @@ python3 scripts/train/run_stage52_validate_dataset.py \
   --max-length 128 \
   --max-steps 50
 ```
+
+建议在训练前冻结一份可回溯快照（train/val/test/schema + SHA256）：
+
+```bash
+python3 scripts/train/run_stage52_snapshot_dataset.py \
+  --train-jsonl /abs/path/train.jsonl \
+  --val-jsonl /abs/path/val.jsonl \
+  --test-jsonl /abs/path/test.jsonl \
+  --schema-json /abs/path/schema.json \
+  --tag external_v1
+```

@@ -379,6 +379,7 @@
 - `scripts/train/build_stage52_synth_extraction_dataset.py`
 - `scripts/train/run_stage52_sft_min.py`
 - `scripts/train/run_stage52_best_of_n_extraction.py`
+- `scripts/train/run_stage52_snapshot_dataset.py`
 - `scripts/report/run_stage52_baseline_compare.py`
 - `scripts/train/run_stage52_build_dpo_pairs.py`
 - `scripts/train/run_stage52_build_synthetic_pairs_from_gold.py`
@@ -422,6 +423,11 @@
 - `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n4_40_forcejson/stage52_summary.json`
 - `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v1_n4_40_forcejson/stage52_summary.json`
 - `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_with_dpo_v1/stage52_baseline_compare.md`
+- `reports/stage52_dataset_snapshot_external_zip22_v2_20260226_021128/manifest.json`
+- `reports/stage52_best_of_n_4b_base_20260226_external_zip22_n4_100_forcejson/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_sftqlora_20260226_external_zip22_v1_n4_100_forcejson/stage52_summary.json`
+- `reports/stage52_best_of_n_4b_dpo_20260226_external_zip22_v1_n4_100_forcejson/stage52_summary.json`
+- `reports/stage52_baseline_compare_4b_20260226_external_zip22_n4_100_with_dpo_v1/stage52_baseline_compare.md`
 
 **备注：**
 - SFT 最小基线（Qwen3-0.6B）已跑通：`max_steps=2`, `max_length=64`, `training_loss=3.5876`。
@@ -432,12 +438,18 @@
 - DPO 最小环（hard_rule synthetic pairs，`max_steps=12`, `max_length=96`, `reference_mode=none`）已复跑并成功收敛训练日志，但在同口径评估下暂未超过 base（`N=1: 0.84375`, `N=4: 0.875` 与 base 持平），后续需提升 pair 难度/质量与 reference 配置。
 - 外部数据（`files(22).zip`, 400/100/100）验收：原始 schema 下 `missing_required=120, type_mismatch=0`；采用 optional-fields schema（`required=[]`）后 validator 全通过（suspicious=0, cross-split overlap=0）。
 - 外部数据快照已冻结并记录校验和（`manifest.json`），用于后续论文/talk 回溯复现。
+- 已补充通用快照脚本 `run_stage52_snapshot_dataset.py`，支持 train/val/test/schema 一键归档（含 SHA256 + row count）。
 - 外部数据基线（test=100）显示解码策略影响显著：`sample N=1` 下 base/SFT 都接近 0；启用 `greedy + force-json-output` 后，base `pass@1=0.02, mean_reward=0.1797`，SFT `pass@1=0.03, mean_reward=0.3619`，SFT 相对 base 有明显提升。
 - 外部数据 `N=4 + force-json`（quick, test=40）：
   - base: `mean_reward_best=0.1923`, `pass@N=0.0000`
   - SFT: `mean_reward_best=0.5006`, `pass@N=0.0250`
   - DPO(v1, reference=none): `mean_reward_best=0.1923`, `pass@N=0.0000`
   - 结论：当前配置下 SFT 有效，DPO 仍未带来增益（需改 pair 质量或 reference 配置）。
+- 外部数据 `N=4 + force-json`（stable, test=100）：
+  - base: `mean_reward_best=0.1997`, `pass@N=0.0200`
+  - SFT: `mean_reward_best=0.4680`, `pass@N=0.0300`
+  - DPO(v1, reference=none): `mean_reward_best=0.1997`, `pass@N=0.0200`
+  - 结论：SFT 相对 base 有稳定提升；DPO(v1) 与 base 持平，未体现增益。
 - 当前模型在简单 extraction 上候选高度一致（Best-of-N margin≈0），已引入基于 gold 扰动的 synthetic pair 生成，保障 DPO 训练数据可用。
 - `run_stage52_dpo_min.py` 当前默认 `reference_mode=none`（DPO-lite）；完整 DPO 可切到 `cpu/same_device` reference 模式。
 - 11GB 显存卡下 DPO 训练建议 `max_length<=128`；`>=192` 容易在 vocab log-softmax 阶段 OOM。

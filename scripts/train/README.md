@@ -9,6 +9,7 @@ Minimal training/baseline utilities for stage 5.x.
 - `run_stage52_build_dpo_pairs.py`: build chosen/rejected pairs from candidate outputs.
 - `run_stage52_dpo_min.py`: minimal DPO loop on pair data (LoRA policy).
 - `run_stage52_validate_dataset.py`: dataset validator (schema/type/leakage/split-overlap checks).
+- `run_stage52_snapshot_dataset.py`: freeze train/val/test + schema with SHA256 manifest for reproducibility.
 
 ## Notes
 
