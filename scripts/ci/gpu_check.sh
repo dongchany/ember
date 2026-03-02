@@ -20,6 +20,10 @@ print_usage() {
   cat <<'EOF'
 Usage: scripts/ci/gpu_check.sh [common-options] [options]
 
+What this script does:
+  - Runs ember --check and dumps logits/hidden for one or more models
+  - Optionally compares against HuggingFace outputs (transformers required)
+
 Common options:
   --build-dir DIR
   --model-path DIR
@@ -49,6 +53,9 @@ Environment fallback (legacy):
   EMBER_DEVICES
   PYTHON_RUNNER / PYTHON_BIN
   REQUIRE_HF_COMPARE
+
+Example:
+  scripts/ci/gpu_check.sh --hub-root ~/xilinx/huggingface/hub --model-b Qwen3-8B --gpus 0,1 --no-require-hf-compare
 EOF
 }
 

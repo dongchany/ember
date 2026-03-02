@@ -19,6 +19,10 @@ print_usage() {
   cat <<'EOF'
 Usage: scripts/ci/greedy_regression.sh [common-options] [options]
 
+What this script does:
+  - Runs deterministic greedy decode checks on fixed prompts
+  - Supports write/read baseline files for regression checking
+
 Common options:
   --build-dir DIR
   --model-path DIR
@@ -43,6 +47,10 @@ Environment fallback (legacy):
   EMBER_DEVICE / EMBER_DEVICES
   GREEDY_PROMPTS_FILE / GREEDY_BASELINE_PATH / GREEDY_WRITE_BASELINE_PATH
   GREEDY_MAX_NEW_TOKENS / GREEDY_MAX_CTX_LEN
+
+Examples:
+  scripts/ci/greedy_regression.sh --hub-root ~/xilinx/huggingface/hub --model-b Qwen3-8B --gpus 1 --write-baseline debug/greedy_baseline_qwen3_8b.json
+  scripts/ci/greedy_regression.sh --hub-root ~/xilinx/huggingface/hub --model-b Qwen3-8B --gpus 1 --baseline debug/greedy_baseline_qwen3_8b.json
 EOF
 }
 

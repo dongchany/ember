@@ -2,6 +2,12 @@
 
 This project uses a layered testing approach.
 
+Quick script cookbook:
+`scripts/ci/README.md`
+
+Recommended local entrypoint:
+`scripts/ci/run_local.sh` (profiles: `quick/full/full-lite/perf`)
+
 ## 1. Build-only check (always run)
 
 ```
@@ -109,13 +115,21 @@ still supported as fallback for compatibility.
 
 Quick dev loop (build + CPU tests + kernel smoke):
 ```
-scripts/ci/dev_check.sh
+scripts/ci/run_local.sh
 ```
 
 Add a model path to include CUDA runtime smoke:
 ```
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-scripts/ci/dev_check.sh
+scripts/ci/run_local.sh full
+```
+
+Practical full-lite profile (low-VRAM friendly):
+```
+scripts/ci/run_local.sh full-lite \
+  --hub-root ~/xilinx/huggingface/hub \
+  --gpus 0,1 \
+  --model-b Qwen3-8B
 ```
 
 Enable deeper checks when needed:

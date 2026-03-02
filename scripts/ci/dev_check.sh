@@ -14,6 +14,14 @@ print_usage() {
   cat <<'EOF'
 Usage: scripts/ci/dev_check.sh [--quick|--full|--perf] [common-options]
 
+Tip:
+  Prefer scripts/ci/run_local.sh for profile-based local usage.
+
+What this script does:
+  1) Build project
+  2) Run CPU tests + CUDA kernel smoke
+  3) Optionally run deeper GPU correctness/regression checks
+
 Modes:
   --quick  Build + CPU tests + minimal GPU smoke (default)
   --full   Run additional GPU correctness checks (requires model path)
@@ -41,6 +49,23 @@ Toggles (env, legacy):
   RUN_LAYER_CHECK=0
   RUN_GPU_CHECK=0
   RUN_GREEDY_REGRESSION=0
+
+Common local recipes:
+  # Quick local sanity (no model required)
+  scripts/ci/dev_check.sh
+
+  # Full check with HF cache model id
+  scripts/ci/dev_check.sh --full --hub-root ~/xilinx/huggingface/hub --gpus 0,1 --model-b Qwen3-8B
+
+  # Full check but skip known-heavy steps (good for 2x11GB cards)
+  RUN_RUNTIME_SMOKE=0 RUN_VARPOS_SMOKE=0 RUN_DUAL_GPU_SMOKE=0 RUN_GREEDY_REGRESSION=0 \
+  scripts/ci/dev_check.sh --full --hub-root ~/xilinx/huggingface/hub --gpus 0,1 --model-b Qwen3-8B --no-require-hf-compare
+
+Expected result:
+  - Exit code 0 and no [FAIL] lines
+  - check-mode dumps under debug/layer_check_* and debug/check_*
+  - If transformers is not installed and --no-require-hf-compare is used,
+    compare steps are skipped by design
 EOF
 }
 
