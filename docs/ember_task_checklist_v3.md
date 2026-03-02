@@ -83,6 +83,12 @@
 - SGLang single(tp=1): mean `65.145`, std `1.941`, CV `2.98%`
 - llama.cpp dual(CUDA0/CUDA1): mean `71.142`, std `1.350`, CV `1.90%`
 
+**论文 / talk 统一引用口径（避免 run 混用）：**
+- 主表默认引用：`reports/framework_compare_4b_20260225_envs_tp2_stable_repeats/framework_compare_repeat_summary.csv`
+- 主指标写法：`mean ± std`（n=3），并在表注里标注 setting：`prompt=2048, decode=128, Ember split=18+18 overlap, SGLang tp=1, vLLM tp=2`
+- `reports/framework_compare_4b_20260225_envs_tp2_mainline_v2/framework_compare.csv` 中的 `llama.cpp=72.313 / SGLang=65.561 / Ember=47.586` 仅作为**单次快照**，不作为主结论
+- `reports/framework_compare_4b_20260225_envs_mainline/framework_compare.csv`（SGLang `31.673`）与 `reports/framework_compare_4b_20260225_envs_tp2_mainline/framework_compare.csv`（SGLang `77.107`, prefill `3.454ms`）视为异常 run，正文不直接引用
+
 ---
 
 ## 2. Talk 准备里程碑 🎯
