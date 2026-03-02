@@ -49,11 +49,16 @@ int main() {
     ember::RuntimeConfig runtime_config;
     runtime_config.max_ctx_len = 64;
     runtime_config.batch_size = 4;
-    runtime_config.device_ids = {0};
+    int device_id = 0;
+    if (const char* env_device = std::getenv("EMBER_DEVICE"); env_device && *env_device) {
+        device_id = std::atoi(env_device);
+        if (device_id < 0) device_id = 0;
+    }
+    runtime_config.device_ids = {device_id};
     runtime_config.kv_cache_dtype = ember::dtype_from_string(config.torch_dtype);
     if (runtime_config.kv_cache_dtype == ember::DType::UNKNOWN) runtime_config.kv_cache_dtype = ember::DType::F16;
 
-    ember::DeviceMap device_map = ember::DeviceMap::single_device(config.num_layers, 0);
+    ember::DeviceMap device_map = ember::DeviceMap::single_device(config.num_layers, device_id);
 
     ember::RuntimeSetup setup;
     ember::Error err = ember::load_runtime(*runtime, model_path, config, device_map, setup);
@@ -149,4 +154,3 @@ int main() {
     ember::shutdown_runtime(*runtime, setup);
     return 0;
 }
-

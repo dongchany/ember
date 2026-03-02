@@ -95,7 +95,13 @@ int main() {
 
     ember::RuntimeSetup setup;
 
-    ember::DeviceMap device_map = ember::DeviceMap::single_device(config.num_layers, 0);
+    int device_id = 0;
+    if (const char* env_device = std::getenv("EMBER_DEVICE"); env_device && *env_device) {
+        device_id = std::atoi(env_device);
+        if (device_id < 0) device_id = 0;
+    }
+
+    ember::DeviceMap device_map = ember::DeviceMap::single_device(config.num_layers, device_id);
 
     auto cleanup = [&]() {
         ember::shutdown_runtime(*runtime, setup);

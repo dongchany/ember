@@ -76,6 +76,37 @@ python3 scripts/compare_hidden.py \
 
 Run these in order. Stop on the first failure and inspect the printed diffs.
 
+## Unified script options
+
+`scripts/ci/dev_check.sh`, `gpu_check.sh`, `layer_check.sh`, and
+`greedy_regression.sh` now share a common CLI option set:
+
+```
+--build-dir <dir>
+--model-path <dir>
+--model-paths <dir1,dir2>   # gpu_check/dev_check
+--model-id <id>             # e.g. Qwen3-8B or Qwen/Qwen3-8B
+--hub-root <dir>            # e.g. ~/xilinx/huggingface/hub
+--gpus <ids>                # e.g. 1 or 0,1
+--python-runner <auto|uv|direct>
+--python-bin <path>
+--require-hf-compare / --no-require-hf-compare
+```
+
+Example (your local style):
+
+```
+scripts/ci/dev_check.sh --full \
+  --hub-root ~/xilinx/huggingface/hub \
+  --model-id Qwen3-8B \
+  --gpus 0,1 \
+  --python-runner uv \
+  --python-bin /home/dong/workspace/ember/torch-env/bin/python
+```
+
+Environment variables (`MODEL_PATH`, `MODEL_PATHS`, `EMBER_DEVICES`, etc.) are
+still supported as fallback for compatibility.
+
 Quick dev loop (build + CPU tests + kernel smoke):
 ```
 scripts/ci/dev_check.sh
@@ -92,6 +123,7 @@ Enable deeper checks when needed:
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
 RUN_LAYER_CHECK=1 \
 RUN_GPU_CHECK=1 \
+RUN_GREEDY_REGRESSION=1 \
 scripts/ci/dev_check.sh
 ```
 
@@ -124,6 +156,7 @@ MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
 6) Quick GPU correctness with the smaller model (baseline):
 ```
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICES="1" \
 LOGITS_MAX_ABS_THRESHOLD=4 \
 LOGITS_MEAN_ABS_THRESHOLD=1 \
 HIDDEN_MAX_ABS_THRESHOLD=1 \
@@ -135,6 +168,7 @@ scripts/ci/gpu_check.sh
 7) Optional: run the larger model as a deeper regression:
 ```
 MODEL_PATH="/path/to/models--Qwen--Qwen3-4B-Instruct-2507" \
+EMBER_DEVICES="1" \
 LOGITS_MAX_ABS_THRESHOLD=4 \
 LOGITS_MEAN_ABS_THRESHOLD=1 \
 HIDDEN_MAX_ABS_THRESHOLD=1 \
@@ -146,12 +180,45 @@ scripts/ci/gpu_check.sh
 8) Optional: run both models in one command:
 ```
 MODEL_PATHS="/path/to/models--Qwen--Qwen3-0.6B,/path/to/models--Qwen--Qwen3-4B-Instruct-2507" \
+EMBER_DEVICES="1" \
 LOGITS_MAX_ABS_THRESHOLD=4 \
 LOGITS_MEAN_ABS_THRESHOLD=1 \
 HIDDEN_MAX_ABS_THRESHOLD=1 \
 HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
 HIDDEN_LAYER=2 \
 scripts/ci/gpu_check.sh
+```
+
+9) Greedy decode token regression (decode path, deterministic):
+```
+MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICE="1" \
+GREEDY_MAX_NEW_TOKENS=16 \
+scripts/ci/greedy_regression.sh
+```
+
+With custom prompts (one prompt per line):
+```
+MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICE="1" \
+GREEDY_PROMPTS_FILE="/path/to/prompts.txt" \
+GREEDY_MAX_NEW_TOKENS=16 \
+scripts/ci/greedy_regression.sh
+```
+
+Record a baseline once, then use it for fast local checks:
+```
+MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICE="1" \
+GREEDY_WRITE_BASELINE_PATH="debug/greedy_baseline_qwen3_0_6b.json" \
+scripts/ci/greedy_regression.sh
+```
+
+```
+MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICE="1" \
+GREEDY_BASELINE_PATH="debug/greedy_baseline_qwen3_0_6b.json" \
+scripts/ci/greedy_regression.sh
 ```
 
 If the logits check fails, fix that first. If logits passes but hidden states fail,
@@ -169,6 +236,7 @@ Notes:
 
 ```
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
+EMBER_DEVICES="1" \
 LAYER=2 \
 HIDDEN_MAX_ABS_THRESHOLD=1 \
 HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
@@ -211,4 +279,17 @@ Use these as guardrails, not strict guarantees.
 - You can also set `MODEL_PATHS` (comma-separated) to run multiple models.
 - `RUN_HIDDEN_COMPARE=0` disables `compare_hidden.py`.
 - `HIDDEN_LAYER` controls which layer is dumped/compared (default: 2).
+- `EMBER_DEVICES` controls `ember --devices` in `gpu_check.sh` and `layer_check.sh`
+  (default: `1` for single-GPU local checks).
+- `EMBER_DEVICE` controls device id for `greedy_regression.sh` decode-loop checks
+  (default: `1`).
+- `REQUIRE_HF_COMPARE=1` (default) makes `gpu_check.sh`/`layer_check.sh` fail if
+  `python3` or `transformers` is missing. Set `REQUIRE_HF_COMPARE=0` to allow skip.
+- Python runner selection for compare scripts:
+  - `PYTHON_RUNNER=auto|uv|direct` (default: `auto`)
+  - `PYTHON_BIN=/path/to/python` (default priority: `torch-env/bin/python` then `python3`)
 - GPU check uses a model-specific dump dir: `debug/check_<model_basename>`.
+- `scripts/ci/dev_check.sh --full` now enables:
+  - `RUN_LAYER_CHECK=1`
+  - `RUN_GPU_CHECK=1`
+  - `RUN_GREEDY_REGRESSION=1`

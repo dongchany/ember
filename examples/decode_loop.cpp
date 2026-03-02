@@ -80,9 +80,11 @@ int main(int argc, char** argv) {
     runtime_config.temperature = getenv_float("TEMPERATURE", 0.0f);
     runtime_config.top_p = getenv_float("TOP_P", 1.0f);
     runtime_config.top_k = getenv_int("TOP_K", 1);
+    const int device_id = getenv_int("DEVICE_ID", 0);
+    runtime_config.device_ids = {device_id};
 
     ember::RuntimeSetup setup;
-    ember::DeviceMap device_map = ember::DeviceMap::single_device(model_config.num_layers, 0);
+    ember::DeviceMap device_map = ember::DeviceMap::single_device(model_config.num_layers, device_id);
 
     ember::Error err = ember::load_runtime(*runtime, model_path, model_config, device_map, setup);
     if (err) {
