@@ -11,7 +11,8 @@ This directory hosts stage-oriented experiment/report drivers.
   - default output directory: `reports/<stage_name>_<timestamp>`
   - deterministic runs should pass explicit `--out-dir`.
 - Shared helpers:
-  - use `common_report.py` for `die/read_csv/write_csv/safe_float/split_ints`.
+  - use `common_report.py` for shared utilities such as:
+    `die/read_csv/write_csv/safe_float/split_ints/resolve_model_dir/resolve_model_arg/format_md_table/run_logged_cmd`.
   - avoid duplicating the same utility functions in new scripts.
 
 ## Quality Guardrails
@@ -26,4 +27,3 @@ This directory hosts stage-oriented experiment/report drivers.
 - Migrate older stage scripts still carrying local copies of CSV/parse helpers to `common_report.py`.
 - Unify CLI flags for common knobs (`--num-rounds`, `--num-gpus`, `--out-dir`) where possible.
 - Add lightweight regression checks that compare key output CSV schemas across runs.
-

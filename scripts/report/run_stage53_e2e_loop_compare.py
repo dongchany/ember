@@ -1,56 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import datetime as dt
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
-from common_report import die, read_csv, run_cmd, safe_float, write_csv
-
-
-def hf_hub_root() -> Path:
-    hub_cache = os.environ.get("HUGGINGFACE_HUB_CACHE", "").strip()
-    if hub_cache:
-        return Path(hub_cache).expanduser().resolve()
-    hf_home = os.environ.get("HF_HOME", "").strip()
-    if hf_home:
-        return (Path(hf_home).expanduser().resolve() / "hub")
-    return (Path.home() / ".cache" / "huggingface" / "hub").resolve()
-
-
-def resolve_snapshot_dir(path: Path) -> Optional[Path]:
-    if not path.exists():
-        return None
-    if (path / "config.json").exists() and list(path.glob("*.safetensors")):
-        return path
-    snap_root = path / "snapshots"
-    if not snap_root.exists():
-        return None
-    cands = [p for p in snap_root.iterdir() if p.is_dir() and (p / "config.json").exists() and list(p.glob("*.safetensors"))]
-    if not cands:
-        return None
-    cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return cands[0]
-
-
-def resolve_model_dir(model_arg: str) -> Path:
-    raw = model_arg.strip()
-    if not raw:
-        die("--model is empty")
-    p = Path(raw).expanduser().resolve()
-    resolved = resolve_snapshot_dir(p)
-    if resolved is not None:
-        return resolved
-    hub_root = hf_hub_root()
-    model_cache_dir = hub_root / ("models--" + raw.replace("/", "--"))
-    resolved = resolve_snapshot_dir(model_cache_dir)
-    if resolved is not None:
-        return resolved
-    die(
-        "failed to resolve model from local cache: "
-        f"{raw}. Checked path='{p}' and HF cache='{model_cache_dir}'."
-    )
-    raise AssertionError("unreachable")
+from common_report import die, read_csv, resolve_model_dir, run_cmd, safe_float, write_csv
 
 
 def resolve_adapter_dir(adapter_arg: str) -> Path:

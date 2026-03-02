@@ -5,141 +5,18 @@ import datetime as dt
 import json
 import os
 import re
-import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-
-def run(cmd: List[str],
-        cwd: Path,
-        log_path: Path,
-        check: bool = True,
-        progress: bool = False,
-        env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    t0 = time.time()
-    if progress:
-        print(f"[run] {' '.join(cmd)}", flush=True)
-    with log_path.open("w", encoding="utf-8") as f:
-        f.write("$ " + " ".join(cmd) + "\n\n")
-        merged_env = os.environ.copy()
-        if env:
-            merged_env.update(env)
-        p = subprocess.run(cmd, cwd=str(cwd), text=True, capture_output=True, env=merged_env)
-        f.write(p.stdout)
-        if p.stderr:
-            f.write("\n[stderr]\n")
-            f.write(p.stderr)
-    if progress:
-        dt_s = time.time() - t0
-        if p.returncode == 0:
-            tail = ""
-            lines = [ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
-            if lines:
-                tail = lines[-1]
-            msg = f"[ok ] rc=0 ({dt_s:.1f}s)"
-            if tail:
-                msg += f" | {tail}"
-            print(msg, flush=True)
-        else:
-            err_tail = ""
-            elines = [ln.strip() for ln in p.stderr.splitlines() if ln.strip()]
-            if elines:
-                err_tail = elines[-1]
-            msg = f"[err] rc={p.returncode} ({dt_s:.1f}s)"
-            if err_tail:
-                msg += f" | {err_tail}"
-            msg += f" | log={log_path}"
-            print(msg, flush=True)
-    if check and p.returncode != 0:
-        raise RuntimeError(f"command failed ({p.returncode}): {' '.join(cmd)} (see {log_path})")
-    return p
-
-
-def parse_csv(path: Path) -> List[Dict[str, str]]:
-    rows: List[Dict[str, str]] = []
-    with path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for r in reader:
-            rows.append(r)
-    return rows
-
-
-def format_md_table(headers: List[str], rows: List[List[str]]) -> str:
-    if not rows:
-        return "_(no data)_\n"
-    out = []
-    out.append("| " + " | ".join(headers) + " |")
-    out.append("| " + " | ".join(["---"] * len(headers)) + " |")
-    for r in rows:
-        out.append("| " + " | ".join(r) + " |")
-    return "\n".join(out) + "\n"
+from common_report import format_md_table, read_csv as parse_csv, resolve_model_arg, run_logged_cmd as run
 
 
 def load_model_config(model_dir: Path) -> Dict:
     cfg_path = model_dir / "config.json"
     with cfg_path.open("r", encoding="utf-8") as f:
         return json.load(f)
-
-def resolve_snapshot_dir(model_or_snapshot_dir: Path) -> Path:
-    """
-    Accepts either:
-      - a snapshot dir (contains config.json)
-      - a HF cache model dir (contains snapshots/<hash>/config.json)
-    Returns the resolved snapshot dir.
-    """
-    d = model_or_snapshot_dir.expanduser().resolve()
-    if (d / "config.json").exists():
-        # Ensure this snapshot is compatible with Ember (expects safetensors weights).
-        if not list(d.glob("*.safetensors")):
-            raise FileNotFoundError(f"no *.safetensors found in snapshot dir: {d}")
-        return d
-    snap_root = d / "snapshots"
-    if snap_root.exists() and snap_root.is_dir():
-        snaps = [p for p in snap_root.iterdir() if p.is_dir() and (p / "config.json").exists()]
-        if not snaps:
-            raise FileNotFoundError(f"no snapshots with config.json under: {snap_root}")
-        snaps.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        # Ensure this snapshot is compatible with Ember (expects safetensors weights).
-        if not list(snaps[0].glob("*.safetensors")):
-            raise FileNotFoundError(f"no *.safetensors found in snapshot dir: {snaps[0]}")
-        return snaps[0]
-    raise FileNotFoundError(f"cannot resolve model dir (need config.json or snapshots/*/config.json): {d}")
-
-def resolve_model_arg(arg: str, hub_root: Optional[Path]) -> Path:
-    """
-    Resolve a model argument to a snapshot directory.
-    - If arg is a valid path: resolve_snapshot_dir(arg).
-    - Else if hub_root is provided: search under hub_root for dirs containing arg as substring.
-    """
-    p = Path(arg).expanduser()
-    if p.exists():
-        return resolve_snapshot_dir(p)
-    if hub_root is None:
-        raise FileNotFoundError(f"model path not found: {p}")
-    root = hub_root.expanduser().resolve()
-    if not root.exists():
-        raise FileNotFoundError(f"hub root not found: {root}")
-    candidates = []
-    needle = arg.lower()
-    for d in root.iterdir():
-        if not d.is_dir():
-            continue
-        if needle not in d.name.lower():
-            continue
-        try:
-            snap = resolve_snapshot_dir(d)
-        except Exception:
-            continue
-        candidates.append(snap)
-    if not candidates:
-        raise FileNotFoundError(f"cannot resolve '{arg}' under hub root: {root}")
-    candidates.sort(key=lambda p2: p2.stat().st_mtime, reverse=True)
-    return candidates[0]
-
 
 def _prepend_env_path(env: Dict[str, str], key: str, prefix: str) -> Dict[str, str]:
     cur = env.get(key, os.environ.get(key, ""))
@@ -533,11 +410,11 @@ def main() -> int:
 
     model_a_cfg = None
     if model_a is not None:
-        model_a = resolve_model_arg(str(model_a), hub_root) if not model_a.exists() else resolve_snapshot_dir(model_a)
+        model_a = resolve_model_arg(str(model_a), hub_root)
         model_a_cfg = load_model_config(model_a)
     model_b_cfg = None
     if model_b is not None:
-        model_b = resolve_model_arg(str(model_b), hub_root) if not model_b.exists() else resolve_snapshot_dir(model_b)
+        model_b = resolve_model_arg(str(model_b), hub_root)
         model_b_cfg = load_model_config(model_b)
 
     # D model resolution (optional).
