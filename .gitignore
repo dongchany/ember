@@ -40,8 +40,41 @@
 # debug information files
 *.dwo
 
-build__pycache__/
-__pycache__/
+# Build outputs
 build/
+build-ci/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Testing/
+
+# Runtime/debug artifacts
+debug/
+*.log
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtual environments
+.venv/
+venv/
+torch-env/
+sglang-env/
+vllm-env/
+
+# Experiment outputs
 reports/*
+
+# Editor/OS local files
+.vscode/
+.idea/
+.DS_Store
+
+# Local helper context
 ember_project_context.txt
