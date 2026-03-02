@@ -7,6 +7,7 @@ source "${SCRIPT_DIR}/common.sh"
 cd "${REPO_ROOT}"
 
 PROFILE="quick"
+HAS_MODEL_ARG=0
 
 print_usage() {
   cat <<'EOF'
@@ -64,6 +65,20 @@ while [[ $# -gt 0 ]]; do
       forward_args+=("$@")
       break
       ;;
+    --model|--model-b|--model-id|--model-path|--model-paths)
+      HAS_MODEL_ARG=1
+      forward_args+=("$1")
+      shift
+      if [[ $# -gt 0 ]]; then
+        forward_args+=("$1")
+        shift
+      fi
+      ;;
+    --model=*|--model-b=*|--model-id=*|--model-path=*|--model-paths=*)
+      HAS_MODEL_ARG=1
+      forward_args+=("$1")
+      shift
+      ;;
     *)
       forward_args+=("$1")
       shift
@@ -101,6 +116,17 @@ esac
 ci_log "run-local" "profile=${PROFILE}"
 if [[ "${PROFILE}" == "full-lite" ]]; then
   ci_log "run-local" "full-lite toggles: RUN_RUNTIME_SMOKE=${RUN_RUNTIME_SMOKE} RUN_VARPOS_SMOKE=${RUN_VARPOS_SMOKE} RUN_DUAL_GPU_SMOKE=${RUN_DUAL_GPU_SMOKE} RUN_GREEDY_REGRESSION=${RUN_GREEDY_REGRESSION}"
+fi
+
+# Quick mode should run without requiring any model. If caller did not explicitly
+# pass a model argument, ignore inherited MODEL_PATH-style env vars to avoid
+# failing on stale values (e.g. hub root instead of snapshot dir).
+if [[ "${PROFILE}" == "quick" && "${HAS_MODEL_ARG}" == "0" ]]; then
+  if [[ -n "${MODEL_PATH:-}${MODEL_PATHS:-}${MODEL_ID:-}" ]]; then
+    ci_log "run-local" "quick profile: ignoring inherited MODEL_PATH/MODEL_PATHS/MODEL_ID env vars"
+  fi
+  unset MODEL_PATH MODEL_PATHS MODEL_ID HUB_ROOT
+  unset CI_MODEL_PATH CI_MODEL_PATHS CI_MODEL_ID CI_HUB_ROOT
 fi
 
 scripts/ci/dev_check.sh "${mode_arg}" "${extra_args[@]}" "${forward_args[@]}"
