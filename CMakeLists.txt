@@ -3,6 +3,9 @@ project(ember LANGUAGES CXX CUDA)
 
 # Training module (optional)
 option(EMBER_ENABLE_TRAIN "Build training module" OFF)
+option(EMBER_BUILD_TESTS "Build tests" OFF)
+option(EMBER_BUILD_EXAMPLES "Build examples" OFF)
+option(EMBER_BUILD_BENCHMARKS "Build benchmarks" OFF)
 
 # C++ 标准
 set(CMAKE_CXX_STANDARD 17)
@@ -101,173 +104,179 @@ target_link_libraries(ember PRIVATE
     ember_infer
 )
 
-# =============================================================================
-# CPU Tests (no external deps)
-# =============================================================================
-add_executable(ember_tests
-    tests/test_cpu.cpp
-)
-target_link_libraries(ember_tests PRIVATE
-    ember_core
-)
-enable_testing()
-add_test(NAME ember_tests COMMAND ember_tests)
-set_tests_properties(ember_tests PROPERTIES LABELS "cpu")
+if(EMBER_BUILD_TESTS)
+    # =============================================================================
+    # CPU Tests (no external deps)
+    # =============================================================================
+    add_executable(ember_tests
+        tests/test_cpu.cpp
+    )
+    target_link_libraries(ember_tests PRIVATE
+        ember_core
+    )
+    enable_testing()
+    add_test(NAME ember_tests COMMAND ember_tests)
+    set_tests_properties(ember_tests PROPERTIES LABELS "cpu")
 
-add_executable(ember_cuda_runtime_smoke
-    tests/test_cuda_runtime.cpp
-)
-target_link_libraries(ember_cuda_runtime_smoke PRIVATE
-    ember_infer
-)
-add_test(NAME ember_cuda_runtime_smoke COMMAND ember_cuda_runtime_smoke)
-set_tests_properties(ember_cuda_runtime_smoke PROPERTIES LABELS "gpu")
+    add_executable(ember_cuda_runtime_smoke
+        tests/test_cuda_runtime.cpp
+    )
+    target_link_libraries(ember_cuda_runtime_smoke PRIVATE
+        ember_infer
+    )
+    add_test(NAME ember_cuda_runtime_smoke COMMAND ember_cuda_runtime_smoke)
+    set_tests_properties(ember_cuda_runtime_smoke PROPERTIES LABELS "gpu")
 
-add_executable(ember_dual_gpu_smoke
-    tests/test_dual_gpu.cpp
-)
-target_link_libraries(ember_dual_gpu_smoke PRIVATE
-    ember_infer
-)
-add_test(NAME ember_dual_gpu_smoke COMMAND ember_dual_gpu_smoke)
-set_tests_properties(ember_dual_gpu_smoke PROPERTIES LABELS "gpu")
+    add_executable(ember_dual_gpu_smoke
+        tests/test_dual_gpu.cpp
+    )
+    target_link_libraries(ember_dual_gpu_smoke PRIVATE
+        ember_infer
+    )
+    add_test(NAME ember_dual_gpu_smoke COMMAND ember_dual_gpu_smoke)
+    set_tests_properties(ember_dual_gpu_smoke PROPERTIES LABELS "gpu")
 
-add_executable(ember_varpos_batch_smoke
-    tests/test_varpos_batch.cpp
-)
-target_link_libraries(ember_varpos_batch_smoke PRIVATE
-    ember_infer
-)
-add_test(NAME ember_varpos_batch_smoke COMMAND ember_varpos_batch_smoke)
-set_tests_properties(ember_varpos_batch_smoke PROPERTIES LABELS "gpu")
+    add_executable(ember_varpos_batch_smoke
+        tests/test_varpos_batch.cpp
+    )
+    target_link_libraries(ember_varpos_batch_smoke PRIVATE
+        ember_infer
+    )
+    add_test(NAME ember_varpos_batch_smoke COMMAND ember_varpos_batch_smoke)
+    set_tests_properties(ember_varpos_batch_smoke PROPERTIES LABELS "gpu")
 
-add_executable(ember_cuda_kernels_smoke
-    tests/test_cuda_kernels.cu
-)
-target_link_libraries(ember_cuda_kernels_smoke PRIVATE
-    ember_kernels_infer
-    ember_cuda_common
-)
-add_test(NAME ember_cuda_kernels_smoke COMMAND ember_cuda_kernels_smoke)
-set_tests_properties(ember_cuda_kernels_smoke PROPERTIES LABELS "gpu")
+    add_executable(ember_cuda_kernels_smoke
+        tests/test_cuda_kernels.cu
+    )
+    target_link_libraries(ember_cuda_kernels_smoke PRIVATE
+        ember_kernels_infer
+        ember_cuda_common
+    )
+    add_test(NAME ember_cuda_kernels_smoke COMMAND ember_cuda_kernels_smoke)
+    set_tests_properties(ember_cuda_kernels_smoke PROPERTIES LABELS "gpu")
 
-add_test(NAME ember_layer_check COMMAND ${CMAKE_SOURCE_DIR}/scripts/ci/layer_check.sh)
-set_tests_properties(ember_layer_check PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    LABELS "gpu;debug"
-)
+    add_test(NAME ember_layer_check COMMAND ${CMAKE_SOURCE_DIR}/scripts/ci/layer_check.sh)
+    set_tests_properties(ember_layer_check PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS "gpu;debug"
+    )
+endif()
 
-# =============================================================================
-# Examples
-# =============================================================================
-add_executable(ember_example_minimal
-    examples/minimal_runtime.cpp
-)
-target_link_libraries(ember_example_minimal PRIVATE
-    ember_infer
-)
+if(EMBER_BUILD_EXAMPLES)
+    # =============================================================================
+    # Examples
+    # =============================================================================
+    add_executable(ember_example_minimal
+        examples/minimal_runtime.cpp
+    )
+    target_link_libraries(ember_example_minimal PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_example_decode_loop
-    examples/decode_loop.cpp
-)
-target_link_libraries(ember_example_decode_loop PRIVATE
-    ember_infer
-)
+    add_executable(ember_example_decode_loop
+        examples/decode_loop.cpp
+    )
+    target_link_libraries(ember_example_decode_loop PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_example_check_mode
-    examples/check_mode.cpp
-)
-target_link_libraries(ember_example_check_mode PRIVATE
-    ember_infer
-)
+    add_executable(ember_example_check_mode
+        examples/check_mode.cpp
+    )
+    target_link_libraries(ember_example_check_mode PRIVATE
+        ember_infer
+    )
+endif()
 
-# =============================================================================
-# Benchmarks
-# =============================================================================
-add_executable(ember_p2p_bandwidth
-    benchmarks/p2p_bandwidth.cpp
-)
-target_link_libraries(ember_p2p_bandwidth PRIVATE
-    CUDA::cudart
-)
+if(EMBER_BUILD_BENCHMARKS)
+    # =============================================================================
+    # Benchmarks
+    # =============================================================================
+    add_executable(ember_p2p_bandwidth
+        benchmarks/p2p_bandwidth.cpp
+    )
+    target_link_libraries(ember_p2p_bandwidth PRIVATE
+        CUDA::cudart
+    )
 
-add_executable(ember_kernel_bench
-    benchmarks/kernel_bench.cu
-)
-target_link_libraries(ember_kernel_bench PRIVATE
-    ember_kernels_infer
-    ember_cuda_common
-)
+    add_executable(ember_kernel_bench
+        benchmarks/kernel_bench.cu
+    )
+    target_link_libraries(ember_kernel_bench PRIVATE
+        ember_kernels_infer
+        ember_cuda_common
+    )
 
-add_executable(ember_phase_analysis
-    benchmarks/phase_analysis.cpp
-)
-target_link_libraries(ember_phase_analysis PRIVATE
-    ember_infer
-)
+    add_executable(ember_phase_analysis
+        benchmarks/phase_analysis.cpp
+    )
+    target_link_libraries(ember_phase_analysis PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_benchmark
-    benchmarks/e2e_benchmark.cpp
-)
-target_link_libraries(ember_benchmark PRIVATE
-    ember_infer
-)
+    add_executable(ember_benchmark
+        benchmarks/e2e_benchmark.cpp
+    )
+    target_link_libraries(ember_benchmark PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_stage_breakdown
-    benchmarks/stage_breakdown.cpp
-)
-target_link_libraries(ember_stage_breakdown PRIVATE
-    ember_infer
-)
+    add_executable(ember_stage_breakdown
+        benchmarks/stage_breakdown.cpp
+    )
+    target_link_libraries(ember_stage_breakdown PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_prefix_cache_benchmark
-    benchmarks/prefix_cache_benchmark.cpp
-)
-target_link_libraries(ember_prefix_cache_benchmark PRIVATE
-    ember_infer
-)
+    add_executable(ember_prefix_cache_benchmark
+        benchmarks/prefix_cache_benchmark.cpp
+    )
+    target_link_libraries(ember_prefix_cache_benchmark PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_multi_candidate_rollout
-    benchmarks/multi_candidate_rollout.cpp
-)
-target_link_libraries(ember_multi_candidate_rollout PRIVATE
-    ember_infer
-)
+    add_executable(ember_multi_candidate_rollout
+        benchmarks/multi_candidate_rollout.cpp
+    )
+    target_link_libraries(ember_multi_candidate_rollout PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_cache_policy_sim
-    benchmarks/cache_policy_sim.cpp
-)
-target_link_libraries(ember_cache_policy_sim PRIVATE
-    ember_core
-)
+    add_executable(ember_cache_policy_sim
+        benchmarks/cache_policy_sim.cpp
+    )
+    target_link_libraries(ember_cache_policy_sim PRIVATE
+        ember_core
+    )
 
-add_executable(ember_lora_hot_update_benchmark
-    benchmarks/lora_hot_update_benchmark.cpp
-)
-target_link_libraries(ember_lora_hot_update_benchmark PRIVATE
-    ember_infer
-)
+    add_executable(ember_lora_hot_update_benchmark
+        benchmarks/lora_hot_update_benchmark.cpp
+    )
+    target_link_libraries(ember_lora_hot_update_benchmark PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_lora_weight_merge_check
-    benchmarks/lora_weight_merge_check.cpp
-)
-target_link_libraries(ember_lora_weight_merge_check PRIVATE
-    ember_infer
-)
+    add_executable(ember_lora_weight_merge_check
+        benchmarks/lora_weight_merge_check.cpp
+    )
+    target_link_libraries(ember_lora_weight_merge_check PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_rollout_update_loop_benchmark
-    benchmarks/rollout_update_loop_benchmark.cpp
-)
-target_link_libraries(ember_rollout_update_loop_benchmark PRIVATE
-    ember_infer
-)
+    add_executable(ember_rollout_update_loop_benchmark
+        benchmarks/rollout_update_loop_benchmark.cpp
+    )
+    target_link_libraries(ember_rollout_update_loop_benchmark PRIVATE
+        ember_infer
+    )
 
-add_executable(ember_serve_benchmark
-    benchmarks/serve_benchmark.cpp
-)
-target_link_libraries(ember_serve_benchmark PRIVATE
-    ember_infer
-)
+    add_executable(ember_serve_benchmark
+        benchmarks/serve_benchmark.cpp
+    )
+    target_link_libraries(ember_serve_benchmark PRIVATE
+        ember_infer
+    )
+endif()
 
 # =============================================================================
 # 安装
