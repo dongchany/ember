@@ -21,14 +21,14 @@ void print_usage(const char* prog) {
     std::cout << "  --memory-fraction F     Max memory fraction per GPU (default: 0.9)\n\n";
     std::cout << "Inference Options:\n";
     std::cout << "  -c, --ctx-size N        Context length (default: 2048)\n";
-    std::cout << "  -n, --n-predict N       Number of tokens to generate (default: 128)\n";
+    std::cout << "  -n, --n-predict N       Number of tokens to generate (default: 256)\n";
     std::cout << "  --temp F                Temperature (default: 0.7)\n";
     std::cout << "  --top-p F               Top-P (default: 0.9)\n";
     std::cout << "  --top-k N               Top-K (default: 40)\n\n";
-    std::cout << "  --repeat-penalty F      Repetition penalty (default: 1.0)\n\n";
-    std::cout << "  --presence-penalty F    Presence penalty (default: 0.0)\n";
-    std::cout << "  --frequency-penalty F   Frequency penalty (default: 0.0)\n";
-    std::cout << "  --no-repeat-ngram N     No-repeat ngram size (default: 0)\n\n";
+    std::cout << "  --repeat-penalty F      Repetition penalty (default: 1.1)\n\n";
+    std::cout << "  --presence-penalty F    Presence penalty (default: 0.2)\n";
+    std::cout << "  --frequency-penalty F   Frequency penalty (default: 0.2)\n";
+    std::cout << "  --no-repeat-ngram N     No-repeat ngram size (default: 3)\n\n";
     std::cout << "Input:\n";
     std::cout << "  -p, --prompt TEXT       Input prompt\n";
     std::cout << "  -i, --interactive       Interactive mode\n\n";
@@ -80,6 +80,7 @@ bool parse_args(int argc, char** argv, Args& args) {
         else if (arg == "-n" || arg == "--n-predict") {
             if (++i >= argc) { std::cerr << "Missing n-predict\n"; return false; }
             args.n_predict = std::stoi(argv[i]);
+            args.n_predict_set = true;
         }
         else if (arg == "--temp") {
             if (++i >= argc) { std::cerr << "Missing temperature\n"; return false; }

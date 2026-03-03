@@ -12,14 +12,14 @@ struct Args {
     std::string prompt;
     std::vector<int> devices = {0};
     int ctx_size = 2048;
-    int n_predict = 128;
+    int n_predict = 256;
     float temperature = 0.7f;
     float top_p = 0.9f;
     int top_k = 40;
-    float repeat_penalty = 1.0f;
-    float presence_penalty = 0.0f;
-    float frequency_penalty = 0.0f;
-    int no_repeat_ngram = 0;
+    float repeat_penalty = 1.1f;
+    float presence_penalty = 0.2f;
+    float frequency_penalty = 0.2f;
+    int no_repeat_ngram = 3;
     float lora_scale = 1.0f;
     float memory_fraction = 0.9f;
     bool verbose = false;
@@ -31,6 +31,7 @@ struct Args {
     bool temperature_set = false;
     bool top_p_set = false;
     bool top_k_set = false;
+    bool n_predict_set = false;
     bool repeat_penalty_set = false;
     bool presence_penalty_set = false;
     bool frequency_penalty_set = false;

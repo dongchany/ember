@@ -266,6 +266,28 @@ static void apply_generation_defaults(ember::cli::Args& args, const std::string&
     if (!args.top_k_set && find_json_number_value(content, "top_k", value)) {
         args.top_k = static_cast<int>(value);
     }
+    if (!args.n_predict_set && find_json_number_value(content, "max_new_tokens", value)) {
+        int max_new_tokens = static_cast<int>(value);
+        if (max_new_tokens > 0) {
+            // Keep startup behavior predictable even if model config contains very large values.
+            args.n_predict = std::clamp(max_new_tokens, 1, 512);
+        }
+    }
+    if (!args.repeat_penalty_set && find_json_number_value(content, "repetition_penalty", value)) {
+        args.repeat_penalty = static_cast<float>(value);
+    }
+    if (!args.presence_penalty_set && find_json_number_value(content, "presence_penalty", value)) {
+        args.presence_penalty = static_cast<float>(value);
+    }
+    if (!args.frequency_penalty_set && find_json_number_value(content, "frequency_penalty", value)) {
+        args.frequency_penalty = static_cast<float>(value);
+    }
+    if (!args.no_repeat_ngram_set && find_json_number_value(content, "no_repeat_ngram_size", value)) {
+        int ngram = static_cast<int>(value);
+        if (ngram >= 0) {
+            args.no_repeat_ngram = ngram;
+        }
+    }
 }
 
 static std::string build_chat_prompt(const std::string& user_prompt) {
