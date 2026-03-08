@@ -47,6 +47,31 @@ void rms_norm_bf16(
     cudaStream_t stream = nullptr
 );
 
+// zero-centered RMSNorm:
+// x_centered = x - mean(x)
+// output = x_centered / sqrt(mean(x_centered^2)+eps) * weight
+void zero_centered_rms_norm_f16(
+    half* output,
+    const half* input,
+    const half* weight,
+    int batch_size,
+    int seq_len,
+    int hidden_size,
+    float eps,
+    cudaStream_t stream = nullptr
+);
+
+void zero_centered_rms_norm_bf16(
+    __nv_bfloat16* output,
+    const __nv_bfloat16* input,
+    const __nv_bfloat16* weight,
+    int batch_size,
+    int seq_len,
+    int hidden_size,
+    float eps,
+    cudaStream_t stream = nullptr
+);
+
 // =============================================================================
 // RoPE (Rotary Position Embedding)
 // =============================================================================

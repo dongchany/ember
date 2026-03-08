@@ -2714,44 +2714,86 @@ Error CudaRuntime::forward_attention_layer(int layer_idx,
     ));
 
     // =====================================================================
-    // Q/K per-head RMSNorm (Qwen3)
+    // Q/K per-head norm:
+    // - Qwen3: RMSNorm
+    // - Qwen3.5 gated attention: zero-centered RMSNorm
     // =====================================================================
     int q_rows = batch_size * seq_len * static_cast<int>(num_heads);
     int k_rows = batch_size * seq_len * static_cast<int>(num_kv_heads);
+    const bool use_zero_centered_qk_norm =
+        config_.uses_hybrid_attention() && config_.is_attention_layer(layer_idx);
     if (compute_dtype == DType::BF16) {
-        kernels::rms_norm_bf16(
-            static_cast<__nv_bfloat16*>(act.q_proj_out),
-            static_cast<const __nv_bfloat16*>(act.q_proj_out),
-            static_cast<const __nv_bfloat16*>(layer.q_norm_weight),
-            q_rows, 1, static_cast<int>(head_dim),
-            config_.rms_norm_eps,
-            stream
-        );
-        kernels::rms_norm_bf16(
-            static_cast<__nv_bfloat16*>(act.k_proj_out),
-            static_cast<const __nv_bfloat16*>(act.k_proj_out),
-            static_cast<const __nv_bfloat16*>(layer.k_norm_weight),
-            k_rows, 1, static_cast<int>(head_dim),
-            config_.rms_norm_eps,
-            stream
-        );
+        if (use_zero_centered_qk_norm) {
+            kernels::zero_centered_rms_norm_bf16(
+                static_cast<__nv_bfloat16*>(act.q_proj_out),
+                static_cast<const __nv_bfloat16*>(act.q_proj_out),
+                static_cast<const __nv_bfloat16*>(layer.q_norm_weight),
+                q_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+            kernels::zero_centered_rms_norm_bf16(
+                static_cast<__nv_bfloat16*>(act.k_proj_out),
+                static_cast<const __nv_bfloat16*>(act.k_proj_out),
+                static_cast<const __nv_bfloat16*>(layer.k_norm_weight),
+                k_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+        } else {
+            kernels::rms_norm_bf16(
+                static_cast<__nv_bfloat16*>(act.q_proj_out),
+                static_cast<const __nv_bfloat16*>(act.q_proj_out),
+                static_cast<const __nv_bfloat16*>(layer.q_norm_weight),
+                q_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+            kernels::rms_norm_bf16(
+                static_cast<__nv_bfloat16*>(act.k_proj_out),
+                static_cast<const __nv_bfloat16*>(act.k_proj_out),
+                static_cast<const __nv_bfloat16*>(layer.k_norm_weight),
+                k_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+        }
     } else {
-        kernels::rms_norm_f16(
-            static_cast<half*>(act.q_proj_out),
-            static_cast<const half*>(act.q_proj_out),
-            static_cast<const half*>(layer.q_norm_weight),
-            q_rows, 1, static_cast<int>(head_dim),
-            config_.rms_norm_eps,
-            stream
-        );
-        kernels::rms_norm_f16(
-            static_cast<half*>(act.k_proj_out),
-            static_cast<const half*>(act.k_proj_out),
-            static_cast<const half*>(layer.k_norm_weight),
-            k_rows, 1, static_cast<int>(head_dim),
-            config_.rms_norm_eps,
-            stream
-        );
+        if (use_zero_centered_qk_norm) {
+            kernels::zero_centered_rms_norm_f16(
+                static_cast<half*>(act.q_proj_out),
+                static_cast<const half*>(act.q_proj_out),
+                static_cast<const half*>(layer.q_norm_weight),
+                q_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+            kernels::zero_centered_rms_norm_f16(
+                static_cast<half*>(act.k_proj_out),
+                static_cast<const half*>(act.k_proj_out),
+                static_cast<const half*>(layer.k_norm_weight),
+                k_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+        } else {
+            kernels::rms_norm_f16(
+                static_cast<half*>(act.q_proj_out),
+                static_cast<const half*>(act.q_proj_out),
+                static_cast<const half*>(layer.q_norm_weight),
+                q_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+            kernels::rms_norm_f16(
+                static_cast<half*>(act.k_proj_out),
+                static_cast<const half*>(act.k_proj_out),
+                static_cast<const half*>(layer.k_norm_weight),
+                k_rows, 1, static_cast<int>(head_dim),
+                config_.rms_norm_eps,
+                stream
+            );
+        }
     }
     
     // =====================================================================
