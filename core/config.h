@@ -7,6 +7,11 @@
 
 namespace ember {
 
+enum class HybridLayerType : uint8_t {
+    GATED_ATTENTION = 0,
+    DELTANET = 1,
+};
+
 // 模型配置（从模型目录的 config.json 读取或由预设构造）
 struct ModelConfig {
     // 基本信息
@@ -34,12 +39,79 @@ struct ModelConfig {
     // 其他
     bool tie_word_embeddings = true;
     std::string torch_dtype;
+
+    // Hybrid Attention（Qwen3.5）
+    // 为空时表示所有层都是标准 attention（兼容现有 Qwen3）。
+    std::vector<HybridLayerType> layer_types;
+
+    // MoE（Qwen3.5 MoE 变体可选）
+    int64_t num_experts = 0;
+    int64_t num_activated_experts = 0;
+
+    bool uses_hybrid_attention() const {
+        return !layer_types.empty();
+    }
+
+    bool is_attention_layer(int64_t layer_idx) const {
+        if (layer_idx < 0 || layer_idx >= num_layers) {
+            return true;
+        }
+        if (layer_types.empty()) {
+            return true;
+        }
+        return layer_types[static_cast<size_t>(layer_idx)] == HybridLayerType::GATED_ATTENTION;
+    }
+
+    bool is_deltanet_layer(int64_t layer_idx) const {
+        if (layer_idx < 0 || layer_idx >= num_layers) {
+            return false;
+        }
+        if (layer_types.empty()) {
+            return false;
+        }
+        return layer_types[static_cast<size_t>(layer_idx)] == HybridLayerType::DELTANET;
+    }
+
+    int64_t num_kv_layers() const {
+        if (layer_types.empty()) {
+            return num_layers;
+        }
+        int64_t count = 0;
+        for (HybridLayerType t : layer_types) {
+            if (t == HybridLayerType::GATED_ATTENTION) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    int64_t num_recurrent_layers() const {
+        if (layer_types.empty()) {
+            return 0;
+        }
+        int64_t count = 0;
+        for (HybridLayerType t : layer_types) {
+            if (t == HybridLayerType::DELTANET) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    bool has_moe() const {
+        return num_experts > 0 && num_activated_experts > 0;
+    }
     
     // 计算每层的 KV cache 大小（字节）
     size_t kv_cache_size_per_layer(int ctx_len, int batch_size = 1, DType dtype = DType::F16) const {
         // K 和 V 各需要 [batch, num_kv_heads, ctx_len, head_dim]
         size_t kv_elements = batch_size * num_kv_heads * ctx_len * head_dim * 2;
         return kv_elements * dtype_size(dtype);
+    }
+
+    // 计算总 KV cache 大小（Hybrid 模型只统计 attention 层）
+    size_t kv_cache_size_total(int ctx_len, int batch_size = 1, DType dtype = DType::F16) const {
+        return kv_cache_size_per_layer(ctx_len, batch_size, dtype) * static_cast<size_t>(num_kv_layers());
     }
     
     // 估算模型权重大小（字节）

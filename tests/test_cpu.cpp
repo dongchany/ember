@@ -145,6 +145,69 @@ void test_config_loader_invalid_head_dim() {
     EXPECT_TRUE(threw);
 }
 
+void test_config_loader_qwen35_default_hybrid_pattern() {
+    const char* json = R"({
+  "model_type": "qwen3_5",
+  "vocab_size": 100,
+  "hidden_size": 64,
+  "num_hidden_layers": 8,
+  "num_attention_heads": 8,
+  "num_key_value_heads": 2,
+  "intermediate_size": 256,
+  "tie_word_embeddings": true,
+  "rope_theta": 10000.0,
+  "rms_norm_eps": 1e-6
+})";
+    TempFile tmp = write_temp_json(json);
+    ember::ModelConfig config = ember::parse_model_config(tmp.path.string());
+    EXPECT_TRUE(config.uses_hybrid_attention());
+    EXPECT_EQ(config.layer_types.size(), static_cast<size_t>(8));
+    EXPECT_EQ(config.num_kv_layers(), static_cast<int64_t>(2));
+    EXPECT_EQ(config.num_recurrent_layers(), static_cast<int64_t>(6));
+}
+
+void test_config_loader_hybrid_array_pattern() {
+    const char* json = R"({
+  "model_type": "qwen3_5",
+  "vocab_size": 100,
+  "hidden_size": 64,
+  "num_hidden_layers": 6,
+  "num_attention_heads": 8,
+  "intermediate_size": 256,
+  "tie_word_embeddings": true,
+  "rope_theta": 10000.0,
+  "rms_norm_eps": 1e-6,
+  "hybrid_layer_pattern": ["deltanet", "deltanet", "attention"]
+})";
+    TempFile tmp = write_temp_json(json);
+    ember::ModelConfig config = ember::parse_model_config(tmp.path.string());
+    EXPECT_TRUE(config.uses_hybrid_attention());
+    EXPECT_EQ(config.layer_types.size(), static_cast<size_t>(6));
+    EXPECT_EQ(config.num_kv_layers(), static_cast<int64_t>(2));
+    EXPECT_EQ(config.num_recurrent_layers(), static_cast<int64_t>(4));
+}
+
+void test_config_loader_moe_fields() {
+    const char* json = R"({
+  "model_type": "qwen3_5_moe",
+  "vocab_size": 100,
+  "hidden_size": 64,
+  "num_hidden_layers": 2,
+  "num_attention_heads": 8,
+  "intermediate_size": 256,
+  "tie_word_embeddings": true,
+  "rope_theta": 10000.0,
+  "rms_norm_eps": 1e-6,
+  "num_experts": 64,
+  "num_experts_per_tok": 8
+})";
+    TempFile tmp = write_temp_json(json);
+    ember::ModelConfig config = ember::parse_model_config(tmp.path.string());
+    EXPECT_EQ(config.num_experts, static_cast<int64_t>(64));
+    EXPECT_EQ(config.num_activated_experts, static_cast<int64_t>(8));
+    EXPECT_TRUE(config.has_moe());
+}
+
 void test_sampler_greedy() {
     ember::Sampler sampler;
     ember::RuntimeConfig cfg;
@@ -221,6 +284,9 @@ int main() {
         {"config_loader_defaults", test_config_loader_defaults},
         {"config_loader_missing_field", test_config_loader_missing_field},
         {"config_loader_invalid_head_dim", test_config_loader_invalid_head_dim},
+        {"config_loader_qwen35_default_hybrid_pattern", test_config_loader_qwen35_default_hybrid_pattern},
+        {"config_loader_hybrid_array_pattern", test_config_loader_hybrid_array_pattern},
+        {"config_loader_moe_fields", test_config_loader_moe_fields},
         {"sampler_greedy", test_sampler_greedy},
         {"sampler_top_k", test_sampler_top_k},
         {"sampler_no_repeat_ngram", test_sampler_no_repeat_ngram},

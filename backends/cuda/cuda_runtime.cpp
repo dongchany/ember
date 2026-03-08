@@ -368,7 +368,8 @@ DeviceMap DeviceMap::auto_map(const ModelConfig& config,
     };
 
     const size_t per_layer_weights = estimate_layer_weight_bytes();
-    const size_t per_layer_kv = config.kv_cache_size_per_layer(ctx_len, batch_size, dtype);
+    const size_t total_kv = config.kv_cache_size_total(ctx_len, batch_size, dtype);
+    const size_t per_layer_kv = (num_layers > 0) ? (total_kv / static_cast<size_t>(num_layers)) : 0;
     const size_t per_layer_total = per_layer_weights + per_layer_kv;
 
     // 额外权重：embedding / lm_head / final_norm
@@ -511,8 +512,7 @@ MemoryEstimate CudaRuntime::estimate_memory(const ModelConfig& config,
     est.weights_bytes = config.estimate_weights_size(estimate_dtype);
     
     // KV Cache
-    est.kv_cache_bytes = config.kv_cache_size_per_layer(ctx_len, batch_size, estimate_dtype) 
-                         * config.num_layers;
+    est.kv_cache_bytes = config.kv_cache_size_total(ctx_len, batch_size, estimate_dtype);
     
     // 激活值（估算峰值）
     size_t hidden_size = config.hidden_size;
@@ -543,6 +543,14 @@ Error CudaRuntime::load(const std::string& model_path,
     
     config_ = config;
     device_map_ = device_map;
+
+    if (config_.uses_hybrid_attention()) {
+        return Error(
+            ErrorCode::NOT_IMPLEMENTED,
+            "Hybrid Qwen3.5 layout detected in config, but DeltaNet/Gated-Attention "
+            "hybrid CUDA forward path is not implemented yet."
+        );
+    }
     
     std::cout << "[CudaRuntime] Loading model from: " << model_path << std::endl;
     std::cout << "[CudaRuntime] Model: " << config.model_type << std::endl;
@@ -1212,6 +1220,9 @@ Error CudaRuntime::allocate_kv_cache(Session& session) {
     auto& kv = session.kv_cache();
     
     for (int layer_idx = 0; layer_idx < kv.num_layers(); ++layer_idx) {
+        if (!kv.layer_enabled(layer_idx)) {
+            continue;
+        }
         int device_id = device_map_.layer_to_device[layer_idx];
         size_t layer_size = kv.layer_size_bytes() / 2;  // K 和 V 各一半
         
@@ -1244,6 +1255,9 @@ void CudaRuntime::free_kv_cache(Session& session) {
     
     for (int i = 0; i < kv.num_layers(); ++i) {
         auto& layer = kv.layer(i);
+        if (!layer.enabled) {
+            continue;
+        }
         if (layer.key_cache.data) {
             cudaSetDevice(layer.device_id);
             cuda_free(layer.key_cache.data);

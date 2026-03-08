@@ -1,13 +1,254 @@
 #include "core/config_loader.h"
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ember {
+
+namespace {
+
+std::string to_lower_copy(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+std::string trim_copy(std::string s) {
+    size_t begin = 0;
+    while (begin < s.size() && std::isspace(static_cast<unsigned char>(s[begin]))) {
+        ++begin;
+    }
+    size_t end = s.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        --end;
+    }
+    return s.substr(begin, end - begin);
+}
+
+bool is_qwen35_model_type(const std::string& model_type) {
+    const std::string lower = to_lower_copy(model_type);
+    return lower.find("qwen3.5") != std::string::npos ||
+           lower.find("qwen3_5") != std::string::npos ||
+           lower.find("qwen3-5") != std::string::npos;
+}
+
+bool parse_layer_type_token(const std::string& token_raw, HybridLayerType& out) {
+    std::string token = to_lower_copy(trim_copy(token_raw));
+    if (token.empty()) {
+        return false;
+    }
+
+    if (token == "0" || token == "attn" || token == "attention" ||
+        token == "gated_attn" || token == "gated_attention" || token == "a") {
+        out = HybridLayerType::GATED_ATTENTION;
+        return true;
+    }
+    if (token == "1" || token == "deltanet" || token == "delta" ||
+        token == "ssm" || token == "d") {
+        out = HybridLayerType::DELTANET;
+        return true;
+    }
+
+    // 宽松匹配，兼容不同命名风格。
+    if (token.find("delta") != std::string::npos || token.find("ssm") != std::string::npos) {
+        out = HybridLayerType::DELTANET;
+        return true;
+    }
+    if (token.find("attn") != std::string::npos || token.find("attention") != std::string::npos) {
+        out = HybridLayerType::GATED_ATTENTION;
+        return true;
+    }
+    return false;
+}
+
+bool expand_layer_pattern(const std::vector<HybridLayerType>& base,
+                          int64_t num_layers,
+                          std::vector<HybridLayerType>& out) {
+    if (num_layers <= 0 || base.empty()) {
+        return false;
+    }
+    const size_t n_layers = static_cast<size_t>(num_layers);
+    if (base.size() > n_layers) {
+        return false;
+    }
+    out.resize(n_layers);
+    for (size_t i = 0; i < n_layers; ++i) {
+        out[i] = base[i % base.size()];
+    }
+    return true;
+}
+
+bool parse_pattern_string(const std::string& pattern,
+                          int64_t num_layers,
+                          std::vector<HybridLayerType>& out) {
+    std::string s = trim_copy(pattern);
+    if (s.empty()) {
+        return false;
+    }
+    std::string lower = to_lower_copy(s);
+    if (lower == "3:1" || lower == "3/1" || lower == "3-1") {
+        const std::vector<HybridLayerType> base = {
+            HybridLayerType::DELTANET,
+            HybridLayerType::DELTANET,
+            HybridLayerType::DELTANET,
+            HybridLayerType::GATED_ATTENTION,
+        };
+        return expand_layer_pattern(base, num_layers, out);
+    }
+
+    std::vector<HybridLayerType> base;
+    bool has_delim = false;
+    for (char c : s) {
+        if (std::isspace(static_cast<unsigned char>(c)) || c == ',' || c == ';' ||
+            c == '|' || c == '/') {
+            has_delim = true;
+            break;
+        }
+    }
+
+    if (!has_delim) {
+        for (char c : s) {
+            if (c == '0' || c == 'a' || c == 'A' || c == 'g' || c == 'G') {
+                base.push_back(HybridLayerType::GATED_ATTENTION);
+            } else if (c == '1' || c == 'd' || c == 'D') {
+                base.push_back(HybridLayerType::DELTANET);
+            } else {
+                return false;
+            }
+        }
+        return expand_layer_pattern(base, num_layers, out);
+    }
+
+    std::string token;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        const bool at_end = (i == s.size());
+        const char c = at_end ? ',' : s[i];
+        if (at_end || std::isspace(static_cast<unsigned char>(c)) || c == ',' ||
+            c == ';' || c == '|' || c == '/') {
+            if (!token.empty()) {
+                HybridLayerType t = HybridLayerType::GATED_ATTENTION;
+                if (!parse_layer_type_token(token, t)) {
+                    return false;
+                }
+                base.push_back(t);
+                token.clear();
+            }
+        } else {
+            token.push_back(c);
+        }
+    }
+    return expand_layer_pattern(base, num_layers, out);
+}
+
+bool find_array_raw(const std::string& content, const std::string& key, std::string& out) {
+    size_t pos = content.find("\"" + key + "\"");
+    if (pos == std::string::npos) return false;
+    pos = content.find(":", pos);
+    if (pos == std::string::npos) return false;
+    pos = content.find("[", pos);
+    if (pos == std::string::npos) return false;
+
+    size_t i = pos;
+    int depth = 0;
+    bool in_string = false;
+    bool escape = false;
+    for (; i < content.size(); ++i) {
+        char c = content[i];
+        if (in_string) {
+            if (escape) {
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '[') {
+            ++depth;
+        } else if (c == ']') {
+            --depth;
+            if (depth == 0) {
+                out = content.substr(pos + 1, i - pos - 1);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool parse_layer_type_array_raw(const std::string& raw,
+                                int64_t num_layers,
+                                std::vector<HybridLayerType>& out) {
+    std::vector<HybridLayerType> base;
+    size_t i = 0;
+    while (i < raw.size()) {
+        while (i < raw.size() && (std::isspace(static_cast<unsigned char>(raw[i])) || raw[i] == ',')) {
+            ++i;
+        }
+        if (i >= raw.size()) break;
+
+        std::string token;
+        if (raw[i] == '"') {
+            ++i;
+            while (i < raw.size()) {
+                char c = raw[i++];
+                if (c == '\\' && i < raw.size()) {
+                    token.push_back(raw[i++]);
+                    continue;
+                }
+                if (c == '"') {
+                    break;
+                }
+                token.push_back(c);
+            }
+        } else {
+            size_t start = i;
+            while (i < raw.size() && raw[i] != ',') {
+                ++i;
+            }
+            token = raw.substr(start, i - start);
+        }
+        token = trim_copy(token);
+        if (token.empty()) {
+            continue;
+        }
+
+        HybridLayerType t = HybridLayerType::GATED_ATTENTION;
+        if (!parse_layer_type_token(token, t)) {
+            return false;
+        }
+        base.push_back(t);
+    }
+
+    return expand_layer_pattern(base, num_layers, out);
+}
+
+void apply_default_qwen35_pattern_if_needed(const ModelConfig& config, std::vector<HybridLayerType>& out) {
+    if (config.num_layers <= 0 || !is_qwen35_model_type(config.model_type)) {
+        return;
+    }
+    out.resize(static_cast<size_t>(config.num_layers));
+    for (int64_t i = 0; i < config.num_layers; ++i) {
+        // 默认 3:1（DeltaNet : Attention）交错。
+        out[static_cast<size_t>(i)] = ((i + 1) % 4 == 0)
+            ? HybridLayerType::GATED_ATTENTION
+            : HybridLayerType::DELTANET;
+    }
+}
+
+}  // namespace
 
 ModelConfig parse_model_config(const std::string& config_path) {
     ModelConfig config;
@@ -149,6 +390,38 @@ ModelConfig parse_model_config(const std::string& config_path) {
         config.max_position_embeddings = 0;
     }
 
+    // 可选 MoE 字段（不同实现命名不同，做兼容解析）
+    int64_t tmp = 0;
+    if (find_int("num_experts", tmp) || find_int("n_routed_experts", tmp) || find_int("num_local_experts", tmp)) {
+        config.num_experts = tmp;
+    }
+    tmp = 0;
+    if (find_int("num_activated_experts", tmp) || find_int("num_experts_per_tok", tmp) || find_int("moe_top_k", tmp)) {
+        config.num_activated_experts = tmp;
+    }
+
+    // 可选 Hybrid 层布局：优先数组，再字符串，再默认规则。
+    std::vector<HybridLayerType> parsed_layer_types;
+    std::string layer_array_raw;
+    if (find_array_raw(content, "hybrid_layer_pattern", layer_array_raw) ||
+        find_array_raw(content, "hybrid_layer_layout", layer_array_raw) ||
+        find_array_raw(content, "layer_types", layer_array_raw)) {
+        if (!parse_layer_type_array_raw(layer_array_raw, config.num_layers, parsed_layer_types)) {
+            throw std::runtime_error("Invalid hybrid layer pattern array");
+        }
+    } else {
+        std::string pattern;
+        if (find_string("hybrid_layer_pattern", pattern) || find_string("hybrid_layer_layout", pattern)) {
+            if (!parse_pattern_string(pattern, config.num_layers, parsed_layer_types)) {
+                throw std::runtime_error("Invalid hybrid layer pattern string: " + pattern);
+            }
+        }
+    }
+    if (parsed_layer_types.empty()) {
+        apply_default_qwen35_pattern_if_needed(config, parsed_layer_types);
+    }
+    config.layer_types = std::move(parsed_layer_types);
+
     if (!missing.empty()) {
         std::ostringstream ss;
         ss << "Missing required model config fields: ";
@@ -181,6 +454,18 @@ ModelConfig parse_model_config(const std::string& config_path) {
     }
     if (config.rms_norm_eps <= 0.0) {
         throw std::runtime_error("rms_norm_eps must be > 0");
+    }
+    if (config.num_experts < 0) {
+        throw std::runtime_error("num_experts must be >= 0");
+    }
+    if (config.num_activated_experts < 0) {
+        throw std::runtime_error("num_activated_experts must be >= 0");
+    }
+    if (config.num_experts > 0 && config.num_activated_experts > config.num_experts) {
+        throw std::runtime_error("num_activated_experts cannot exceed num_experts");
+    }
+    if (!config.layer_types.empty() && static_cast<int64_t>(config.layer_types.size()) != config.num_layers) {
+        throw std::runtime_error("hybrid layer pattern size does not match num_hidden_layers");
     }
 
     return config;

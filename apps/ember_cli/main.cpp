@@ -412,6 +412,16 @@ int main(int argc, char** argv) {
     std::cout << "  Layers: " << model_config.num_layers << "\n";
     std::cout << "  Heads: " << model_config.num_heads << " (KV: " << model_config.num_kv_heads << ")\n";
     std::cout << "  Intermediate: " << model_config.intermediate_size << "\n";
+    if (model_config.uses_hybrid_attention()) {
+        std::cout << "  Hybrid: yes (attn_layers=" << model_config.num_kv_layers()
+                  << ", deltanet_layers=" << model_config.num_recurrent_layers() << ")\n";
+    } else {
+        std::cout << "  Hybrid: no (all attention layers)\n";
+    }
+    if (model_config.has_moe()) {
+        std::cout << "  MoE: experts=" << model_config.num_experts
+                  << ", top_k=" << model_config.num_activated_experts << "\n";
+    }
     std::cout << "\n";
     
     // 创建设备映射

@@ -55,6 +55,10 @@ public:
         auto& kv = session.kv_cache();
         for (int l = 0; l < mc.num_layers; ++l) {
             auto& layer_kv = kv.layer(l);
+            if (!layer_kv.enabled) {
+                g.saved_[static_cast<size_t>(l)] = SavedKV{nullptr, nullptr, layer_kv.device_id};
+                continue;
+            }
             if (!layer_kv.key_cache.data || !layer_kv.value_cache.data) {
                 g.restore();
                 return Error(ErrorCode::OUT_OF_MEMORY, "KV cache not allocated");
@@ -97,4 +101,3 @@ private:
 };
 
 }  // namespace ember
-

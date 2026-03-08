@@ -13,8 +13,9 @@ struct LayerKVCache {
     Tensor key_cache;    // [batch, num_kv_heads, max_ctx, head_dim]
     Tensor value_cache;  // [batch, num_kv_heads, max_ctx, head_dim]
     int device_id = 0;
+    bool enabled = true;
     
-    bool allocated() const { return key_cache.data != nullptr; }
+    bool allocated() const { return enabled && key_cache.data != nullptr; }
 };
 
 // KV Cache 管理器
@@ -23,21 +24,34 @@ public:
     KVCache() = default;
     
     // 初始化缓存（不分配内存，只设置元数据）
-    void init(int num_layers, int batch_size, int max_ctx_len, 
-              int num_kv_heads, int head_dim, DType dtype) {
+    void init(int num_layers, int batch_size, int max_ctx_len,
+              int num_kv_heads, int head_dim, DType dtype,
+              const std::vector<HybridLayerType>& layer_types = {}) {
         num_layers_ = num_layers;
         batch_size_ = batch_size;
         max_ctx_len_ = max_ctx_len;
         num_kv_heads_ = num_kv_heads;
         head_dim_ = head_dim;
         dtype_ = dtype;
+        num_enabled_layers_ = 0;
         
         layer_caches_.resize(num_layers);
         for (int i = 0; i < num_layers; ++i) {
-            layer_caches_[i].key_cache.shape = {batch_size, num_kv_heads, max_ctx_len, head_dim};
-            layer_caches_[i].key_cache.dtype = dtype;
-            layer_caches_[i].value_cache.shape = {batch_size, num_kv_heads, max_ctx_len, head_dim};
-            layer_caches_[i].value_cache.dtype = dtype;
+            const bool has_layer_types = layer_types.size() == static_cast<size_t>(num_layers);
+            const bool enabled = !has_layer_types ||
+                layer_types[static_cast<size_t>(i)] == HybridLayerType::GATED_ATTENTION;
+            auto& layer = layer_caches_[i];
+            layer.enabled = enabled;
+            layer.key_cache.dtype = dtype;
+            layer.value_cache.dtype = dtype;
+            if (enabled) {
+                layer.key_cache.shape = {batch_size, num_kv_heads, max_ctx_len, head_dim};
+                layer.value_cache.shape = {batch_size, num_kv_heads, max_ctx_len, head_dim};
+                ++num_enabled_layers_;
+            } else {
+                layer.key_cache.shape.clear();
+                layer.value_cache.shape.clear();
+            }
         }
     }
     
@@ -47,11 +61,18 @@ public:
     
     // 设置层的缓存指针
     void set_layer_data(int layer_idx, void* key_data, void* value_data, int device_id) {
+        if (!layer_caches_[layer_idx].enabled) {
+            return;
+        }
         layer_caches_[layer_idx].key_cache.data = key_data;
         layer_caches_[layer_idx].key_cache.device_id = device_id;
         layer_caches_[layer_idx].value_cache.data = value_data;
         layer_caches_[layer_idx].value_cache.device_id = device_id;
         layer_caches_[layer_idx].device_id = device_id;
+    }
+
+    bool layer_enabled(int layer_idx) const {
+        return layer_caches_[layer_idx].enabled;
     }
     
     // 计算单层缓存大小
@@ -62,10 +83,11 @@ public:
     
     // 计算总缓存大小
     size_t total_size_bytes() const {
-        return layer_size_bytes() * num_layers_;
+        return layer_size_bytes() * static_cast<size_t>(num_enabled_layers_);
     }
     
     int num_layers() const { return num_layers_; }
+    int num_enabled_layers() const { return num_enabled_layers_; }
     int max_ctx_len() const { return max_ctx_len_; }
     DType dtype() const { return dtype_; }
 
@@ -75,9 +97,90 @@ private:
     int max_ctx_len_ = 0;
     int num_kv_heads_ = 0;
     int head_dim_ = 0;
+    int num_enabled_layers_ = 0;
     DType dtype_ = DType::F16;
     
     std::vector<LayerKVCache> layer_caches_;
+};
+
+// 单层 DeltaNet recurrent state
+struct LayerRecurrentState {
+    Tensor state;  // [batch, num_heads, head_dim, head_dim]
+    int device_id = 0;
+    bool enabled = false;
+
+    bool allocated() const { return enabled && state.data != nullptr; }
+};
+
+// Recurrent state 管理器（DeltaNet 层使用）
+class RecurrentStateCache {
+public:
+    RecurrentStateCache() = default;
+
+    void init(int num_layers, int batch_size, int num_heads, int head_dim, DType dtype,
+              const std::vector<HybridLayerType>& layer_types = {}) {
+        num_layers_ = num_layers;
+        batch_size_ = batch_size;
+        num_heads_ = num_heads;
+        head_dim_ = head_dim;
+        dtype_ = dtype;
+        num_enabled_layers_ = 0;
+
+        states_.resize(num_layers);
+        for (int i = 0; i < num_layers; ++i) {
+            const bool has_layer_types = layer_types.size() == static_cast<size_t>(num_layers);
+            const bool enabled = has_layer_types &&
+                layer_types[static_cast<size_t>(i)] == HybridLayerType::DELTANET;
+            auto& layer = states_[i];
+            layer.enabled = enabled;
+            layer.state.dtype = dtype;
+            if (enabled) {
+                layer.state.shape = {batch_size, num_heads, head_dim, head_dim};
+                ++num_enabled_layers_;
+            } else {
+                layer.state.shape.clear();
+            }
+        }
+    }
+
+    LayerRecurrentState& layer(int i) { return states_[i]; }
+    const LayerRecurrentState& layer(int i) const { return states_[i]; }
+
+    void set_layer_data(int layer_idx, void* state_data, int device_id) {
+        auto& layer = states_[layer_idx];
+        if (!layer.enabled) {
+            return;
+        }
+        layer.state.data = state_data;
+        layer.state.device_id = device_id;
+        layer.device_id = device_id;
+    }
+
+    bool layer_enabled(int layer_idx) const {
+        return states_[layer_idx].enabled;
+    }
+
+    size_t layer_size_bytes() const {
+        return static_cast<size_t>(batch_size_) * static_cast<size_t>(num_heads_) *
+               static_cast<size_t>(head_dim_) * static_cast<size_t>(head_dim_) *
+               dtype_size(dtype_);
+    }
+
+    size_t total_size_bytes() const {
+        return layer_size_bytes() * static_cast<size_t>(num_enabled_layers_);
+    }
+
+    int num_layers() const { return num_layers_; }
+    int num_enabled_layers() const { return num_enabled_layers_; }
+
+private:
+    int num_layers_ = 0;
+    int batch_size_ = 1;
+    int num_heads_ = 0;
+    int head_dim_ = 0;
+    int num_enabled_layers_ = 0;
+    DType dtype_ = DType::F16;
+    std::vector<LayerRecurrentState> states_;
 };
 
 // 推理会话状态
@@ -96,7 +199,17 @@ public:
             runtime_config.max_ctx_len,
             model_config.num_kv_heads,
             model_config.head_dim,
-            runtime_config.kv_cache_dtype
+            runtime_config.kv_cache_dtype,
+            model_config.layer_types
+        );
+
+        recurrent_states_.init(
+            model_config.num_layers,
+            runtime_config.batch_size,
+            model_config.num_heads,
+            model_config.head_dim,
+            runtime_config.kv_cache_dtype,
+            model_config.layer_types
         );
         
         cur_pos_by_batch_.assign(static_cast<size_t>(runtime_config.batch_size), 0);
@@ -139,6 +252,9 @@ public:
     // 获取 KV cache
     KVCache& kv_cache() { return kv_cache_; }
     const KVCache& kv_cache() const { return kv_cache_; }
+
+    RecurrentStateCache& recurrent_states() { return recurrent_states_; }
+    const RecurrentStateCache& recurrent_states() const { return recurrent_states_; }
     
     // 获取配置
     const ModelConfig& model_config() const { return model_config_; }
@@ -152,6 +268,7 @@ private:
     ModelConfig model_config_;
     RuntimeConfig runtime_config_;
     KVCache kv_cache_;
+    RecurrentStateCache recurrent_states_;
     std::vector<int> cur_pos_by_batch_;
     std::vector<int> generated_tokens_;
 };
