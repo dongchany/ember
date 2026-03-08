@@ -554,6 +554,13 @@ Error CudaRuntime::load(const std::string& model_path,
     
     config_ = config;
     device_map_ = device_map;
+
+    if (config_.has_moe()) {
+        return Error(
+            ErrorCode::NOT_IMPLEMENTED,
+            "MoE router/expert execution is not implemented yet"
+        );
+    }
     
     std::cout << "[CudaRuntime] Loading model from: " << model_path << std::endl;
     std::cout << "[CudaRuntime] Model: " << config.model_type << std::endl;
