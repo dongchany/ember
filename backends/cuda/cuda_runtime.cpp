@@ -1236,6 +1236,7 @@ void CudaRuntime::free_activation_buffers() {
 
 Error CudaRuntime::allocate_kv_cache(Session& session) {
     auto& kv = session.kv_cache();
+    auto& recurrent = session.recurrent_states();
     
     for (int layer_idx = 0; layer_idx < kv.num_layers(); ++layer_idx) {
         if (!kv.layer_enabled(layer_idx)) {
@@ -1261,15 +1262,36 @@ Error CudaRuntime::allocate_kv_cache(Session& session) {
         
         kv.set_layer_data(layer_idx, k_data, v_data, device_id);
     }
+
+    for (int layer_idx = 0; layer_idx < recurrent.num_layers(); ++layer_idx) {
+        if (!recurrent.layer_enabled(layer_idx)) {
+            continue;
+        }
+        int device_id = device_map_.layer_to_device[layer_idx];
+        const size_t layer_size = recurrent.layer_size_bytes();
+
+        void* state_data = nullptr;
+        Error err = cuda_malloc(&state_data, layer_size, device_id);
+        if (err) return err;
+        err = cuda_memset(state_data, 0, layer_size, device_id);
+        if (err) return err;
+
+        recurrent.set_layer_data(layer_idx, state_data, device_id);
+    }
     
     std::cout << "[CudaRuntime] Allocated KV cache: " 
               << format_bytes(kv.total_size_bytes()) << std::endl;
+    if (recurrent.num_enabled_layers() > 0) {
+        std::cout << "[CudaRuntime] Allocated recurrent state: "
+                  << format_bytes(recurrent.total_size_bytes()) << std::endl;
+    }
     
     return Error::success();
 }
 
 void CudaRuntime::free_kv_cache(Session& session) {
     auto& kv = session.kv_cache();
+    auto& recurrent = session.recurrent_states();
     
     for (int i = 0; i < kv.num_layers(); ++i) {
         auto& layer = kv.layer(i);
@@ -1282,6 +1304,18 @@ void CudaRuntime::free_kv_cache(Session& session) {
             cuda_free(layer.value_cache.data);
             layer.key_cache.data = nullptr;
             layer.value_cache.data = nullptr;
+        }
+    }
+
+    for (int i = 0; i < recurrent.num_layers(); ++i) {
+        auto& layer = recurrent.layer(i);
+        if (!layer.enabled) {
+            continue;
+        }
+        if (layer.state.data) {
+            cudaSetDevice(layer.device_id);
+            cuda_free(layer.state.data);
+            layer.state.data = nullptr;
         }
     }
 }
