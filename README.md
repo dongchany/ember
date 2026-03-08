@@ -217,7 +217,7 @@ Actual throughput depends on hardware and model size.
 ## Roadmap
 
 - [x] M0: Single-GPU inference baseline
-- [ ] M1: Dual-GPU pipeline parallelism
+- [x] M1: Dual-GPU pipeline parallelism
 - [ ] M2: Quantization support (INT8/INT4)
 - [ ] M3: FlashAttention optimization
 
