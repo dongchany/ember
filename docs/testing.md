@@ -1,6 +1,11 @@
 # Testing and Regression
 
-This project uses a layered testing approach.
+Status date: **March 8, 2026**.
+
+This guide defines the default validation ladder for current Qwen3 support and
+adds the benchmark methodology required for the Qwen3.5 upgrade cycle.
+
+## 1. Fast regression ladder (current default)
 
 Quick script cookbook:
 `scripts/ci/README.md`
@@ -8,86 +13,82 @@ Quick script cookbook:
 Recommended local entrypoint:
 `scripts/ci/run_local.sh` (profiles: `quick/full/full-lite/perf`)
 
-## 1. Build-only check (always run)
+## 1.1 Build-only check (always run)
 
-```
+```bash
 cmake --build build --parallel
 ```
 
 CI helper:
-```
+
+```bash
 scripts/ci/build.sh
 ```
 
-## 2. CPU unit tests (fast, no GPU)
+## 1.2 CPU tests (fast, no GPU)
 
-```
+```bash
 ./build/ember_tests
 ```
 
-## 3. CTest (optional)
+## 1.3 CTest (optional)
 
-Run all registered tests (useful once the build directory exists):
-```
+```bash
 ctest --test-dir build
 ```
 
-Run only GPU-labeled tests:
-```
+GPU-only labels:
+
+```bash
 ctest --test-dir build -L gpu
 ```
 
-Pass a model path for tests that need it:
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-ctest --test-dir build -L gpu
-```
+## 1.4 CUDA smoke tests
 
-## 4. CUDA kernel smoke tests (GPU, no model required)
+Kernel smoke (no model required):
 
-```
+```bash
 ./build/ember_cuda_kernels_smoke
 ```
 
-## 4. CUDA runtime smoke test (GPU, requires MODEL_PATH)
+Runtime smoke (requires `MODEL_PATH`):
 
-```
+```bash
 MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
 ./build/ember_cuda_runtime_smoke
 ```
 
-## 4. Correctness check (GPU)
+## 1.5 Correctness alignment checks
 
 Dump outputs:
-```
+
+```bash
 ./build/ember -m /path/to/model --check --dump-layer 2 -p "Hello, my name is"
 ```
 
 Compare logits:
-```
+
+```bash
 python3 scripts/compare_logits.py \
   --model /path/to/model \
   --debug-dir debug/check_models--Qwen--Qwen3-0_6B
 ```
 
 Compare hidden states:
-```
+
+```bash
 python3 scripts/compare_hidden.py \
   --model /path/to/model \
   --debug-dir debug/check_models--Qwen--Qwen3-0_6B \
   --layer 2
 ```
 
-## Recommended workflow (local GPU)
-
-Run these in order. Stop on the first failure and inspect the printed diffs.
-
-## Unified script options
+## 1.6 Unified CI script options
 
 `scripts/ci/dev_check.sh`, `gpu_check.sh`, `layer_check.sh`, and
-`greedy_regression.sh` now share a common CLI option set:
+`greedy_regression.sh` share these options:
 
-```
+```text
 --build-dir <dir>
 --model-path <dir>
 --model-paths <dir1,dir2>   # gpu_check/dev_check
@@ -99,9 +100,9 @@ Run these in order. Stop on the first failure and inspect the printed diffs.
 --require-hf-compare / --no-require-hf-compare
 ```
 
-Example (your local style):
+Example:
 
-```
+```bash
 scripts/ci/dev_check.sh --full \
   --hub-root ~/xilinx/huggingface/hub \
   --model-id Qwen3-8B \
@@ -110,200 +111,83 @@ scripts/ci/dev_check.sh --full \
   --python-bin /home/dong/workspace/ember/torch-env/bin/python
 ```
 
-Environment variables (`MODEL_PATH`, `MODEL_PATHS`, `EMBER_DEVICES`, etc.) are
-still supported as fallback for compatibility.
+## 2. Standard benchmark stack (for Qwen3.5 milestones)
 
-Quick dev loop (build + CPU tests + kernel smoke):
-```
-scripts/ci/run_local.sh
-```
+For upgrade milestones, report both quality and serving performance with
+reproducible methods.
 
-Add a model path to include CUDA runtime smoke:
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-scripts/ci/run_local.sh full
-```
+## 2.1 Layer A: model quality (lm-eval)
 
-Practical full-lite profile (low-VRAM friendly):
-```
-scripts/ci/run_local.sh full-lite \
-  --hub-root ~/xilinx/huggingface/hub \
-  --gpus 0,1 \
-  --model-b Qwen3-8B
-```
+Goal: verify architectural/quantization changes do not break quality.
 
-Enable deeper checks when needed:
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-RUN_LAYER_CHECK=1 \
-RUN_GPU_CHECK=1 \
-RUN_GREEDY_REGRESSION=1 \
-scripts/ci/dev_check.sh
+Recommended tasks:
+- `mmlu`
+- `gsm8k`
+- `hellaswag`
+- `arc_challenge`
+- `truthfulqa`
+
+Run (via OpenAI-compatible endpoint):
+
+```bash
+lm_eval --model local-completions \
+  --model_args model=qwen3.5-9b,base_url=http://localhost:8080/v1 \
+  --tasks mmlu,gsm8k,hellaswag,arc_challenge,truthfulqa \
+  --batch_size 8 \
+  --output_path results/lm_eval_qwen35_9b/
 ```
 
-1) Build (fast, always run):
-```
-scripts/ci/build.sh
-```
+## 2.2 Layer B: serving performance (trace replay)
 
-2) CPU unit tests (fast, no GPU):
-```
-./build/ember_tests
-```
+Goal: evaluate user-facing latency and throughput with realistic request
+patterns.
 
-3) CTest (optional):
-```
-ctest --test-dir build
-```
+Core metrics:
+- TTFT (time to first token)
+- TPOT (time per output token)
+- ITL (inter-token latency)
+- output throughput (tok/s)
 
-4) CUDA kernel smoke tests (GPU, no model required):
-```
-./build/ember_cuda_kernels_smoke
-```
+Use one benchmark runner consistently across engines
+(Ember / llama.cpp / SGLang / KTransformers) with the same:
+- hardware
+- model
+- prompt/output length constraints
+- request arrival pattern
 
-5) CUDA runtime smoke test (GPU, requires MODEL_PATH):
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-./build/ember_cuda_runtime_smoke
-```
+## 2.3 Layer C: MLPerf-compatible reporting
 
-6) Quick GPU correctness with the smaller model (baseline):
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICES="1" \
-LOGITS_MAX_ABS_THRESHOLD=4 \
-LOGITS_MEAN_ABS_THRESHOLD=1 \
-HIDDEN_MAX_ABS_THRESHOLD=1 \
-HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
-HIDDEN_LAYER=2 \
-scripts/ci/gpu_check.sh
-```
+Goal: publish a standardized view of performance across scenarios.
 
-7) Optional: run the larger model as a deeper regression:
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-4B-Instruct-2507" \
-EMBER_DEVICES="1" \
-LOGITS_MAX_ABS_THRESHOLD=4 \
-LOGITS_MEAN_ABS_THRESHOLD=1 \
-HIDDEN_MAX_ABS_THRESHOLD=1 \
-HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
-HIDDEN_LAYER=2 \
-scripts/ci/gpu_check.sh
-```
+Minimum recommended internal scenarios:
+- Offline throughput
+- Single-request latency (single-stream style)
+- Interactive percentile report (TTFT/TPOT)
 
-8) Optional: run both models in one command:
-```
-MODEL_PATHS="/path/to/models--Qwen--Qwen3-0.6B,/path/to/models--Qwen--Qwen3-4B-Instruct-2507" \
-EMBER_DEVICES="1" \
-LOGITS_MAX_ABS_THRESHOLD=4 \
-LOGITS_MEAN_ABS_THRESHOLD=1 \
-HIDDEN_MAX_ABS_THRESHOLD=1 \
-HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
-HIDDEN_LAYER=2 \
-scripts/ci/gpu_check.sh
-```
+Report at least:
+- mean
+- median
+- P99
 
-9) Greedy decode token regression (decode path, deterministic):
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICE="1" \
-GREEDY_MAX_NEW_TOKENS=16 \
-scripts/ci/greedy_regression.sh
-```
+for TTFT/TPOT and total throughput.
 
-With custom prompts (one prompt per line):
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICE="1" \
-GREEDY_PROMPTS_FILE="/path/to/prompts.txt" \
-GREEDY_MAX_NEW_TOKENS=16 \
-scripts/ci/greedy_regression.sh
-```
+## 3. Required report bundle for each major milestone
 
-Record a baseline once, then use it for fast local checks:
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICE="1" \
-GREEDY_WRITE_BASELINE_PATH="debug/greedy_baseline_qwen3_0_6b.json" \
-scripts/ci/greedy_regression.sh
-```
+For each milestone branch/tag, publish one report directory containing:
 
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICE="1" \
-GREEDY_BASELINE_PATH="debug/greedy_baseline_qwen3_0_6b.json" \
-scripts/ci/greedy_regression.sh
-```
+1. commit SHA and build flags
+2. hardware/software environment
+3. regression ladder pass/fail outputs
+4. lm-eval task scores
+5. serving latency/throughput metrics (mean/median/P99)
+6. comparison table vs previous milestone baseline
 
-If the logits check fails, fix that first. If logits passes but hidden states fail,
-use `compare_hidden.py` output to pick a layer and then run `scripts/ci/layer_check.sh`
-to get per-layer intermediate diffs.
-
-## 7. Single-layer integration check (debugging)
-
-Use this when a GPU correctness check fails and you want to localize the issue to
-a specific layer and its sub-ops (attn/MLP intermediates).
-
-Notes:
-- "dump" means saving intermediate tensors (typically the last token vector) to files.
-- "dump layer" selects which layer to dump. Use `-1` to dump all layers (slower, more files).
-
-```
-MODEL_PATH="/path/to/models--Qwen--Qwen3-0.6B" \
-EMBER_DEVICES="1" \
-LAYER=2 \
-HIDDEN_MAX_ABS_THRESHOLD=1 \
-HIDDEN_MEAN_ABS_THRESHOLD=0.2 \
-scripts/ci/layer_check.sh
-```
-
-## 8. Sampling sanity (GPU)
-
-Greedy (deterministic):
-```
-./build/ember -m /path/to/model -p "Hello, my name is" --temp 0 --top-k 1 --top-p 1
-```
-
-Typical sampling:
-```
-./build/ember -m /path/to/model -p "Hello, my name is" \
-  --temp 0.7 --top-p 0.9 --top-k 40 \
-  --repeat-penalty 1.1 --presence-penalty 0.2 --frequency-penalty 0.2 \
-  --no-repeat-ngram 3
-```
-
-## Expected thresholds
-
-These are guidance values for Qwen3-0.6B:
-- `compare_logits.py`: max_abs_diff < 4.0, mean_abs_diff < 1.0
-- `compare_hidden.py` (layer 2): max_abs_diff ~1.0, mean_abs_diff ~0.2
-
-Use these as guardrails, not strict guarantees.
-
-## CI notes
+## 4. CI notes
 
 - `.github/workflows/ci.yml` builds in a CUDA container (no GPU required).
-- `.github/workflows/gpu-check.yml` is optional and expects a self-hosted GPU runner.
-- `scripts/ci/gpu_check.sh` can enforce thresholds via:
+- `.github/workflows/gpu-check.yml` expects a self-hosted GPU runner.
+- `scripts/ci/gpu_check.sh` threshold envs:
   - `LOGITS_MAX_ABS_THRESHOLD`
   - `LOGITS_MEAN_ABS_THRESHOLD`
   - `HIDDEN_MAX_ABS_THRESHOLD`
   - `HIDDEN_MEAN_ABS_THRESHOLD`
-- `gpu_check.sh` expects `MODEL_PATH` to be set on the runner (a local HF model directory).
-- You can also set `MODEL_PATHS` (comma-separated) to run multiple models.
-- `RUN_HIDDEN_COMPARE=0` disables `compare_hidden.py`.
-- `HIDDEN_LAYER` controls which layer is dumped/compared (default: 2).
-- `EMBER_DEVICES` controls `ember --devices` in `gpu_check.sh` and `layer_check.sh`
-  (default: `1` for single-GPU local checks).
-- `EMBER_DEVICE` controls device id for `greedy_regression.sh` decode-loop checks
-  (default: `1`).
-- `REQUIRE_HF_COMPARE=1` (default) makes `gpu_check.sh`/`layer_check.sh` fail if
-  `python3` or `transformers` is missing. Set `REQUIRE_HF_COMPARE=0` to allow skip.
-- Python runner selection for compare scripts:
-  - `PYTHON_RUNNER=auto|uv|direct` (default: `auto`)
-  - `PYTHON_BIN=/path/to/python` (default priority: `torch-env/bin/python` then `python3`)
-- GPU check uses a model-specific dump dir: `debug/check_<model_basename>`.
-- `scripts/ci/dev_check.sh --full` now enables:
-  - `RUN_LAYER_CHECK=1`
-  - `RUN_GPU_CHECK=1`
-  - `RUN_GREEDY_REGRESSION=1`

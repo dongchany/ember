@@ -1,17 +1,25 @@
 # Architecture Overview
 
-This document explains the Ember inference engine at a high level and highlights
-Qwen3-specific details that matter for correctness and performance.
+This document describes Ember's current runtime architecture and the planned
+architecture changes for Qwen3.5.
 
-## Dataflow (single step)
+Status date: **March 8, 2026**.
 
+## 1. Current architecture (Qwen3)
+
+Ember currently runs Qwen3 dense decoder models with a Transformer-style layer
+loop.
+
+Single-step flow:
+
+```text
 Input IDs
   -> Embedding lookup
   -> N decoder layers:
      - Input RMSNorm
      - Q/K/V projection
-     - Q/K per-head RMSNorm (Qwen3-specific)
-     - RoPE (rotary position embedding)
+     - Q/K per-head RMSNorm
+     - RoPE
      - KV cache update
      - Attention (GQA)
      - O projection + residual
@@ -20,43 +28,84 @@ Input IDs
   -> Final RMSNorm
   -> LM head -> logits
   -> Sampler -> next token
+```
 
-## Key modules
+## 2. Key modules
 
-- `apps/ember_cli/main.cpp`:
-  CLI entry point, argument parsing, session lifecycle, sampling loop.
-- `core/`:
-  - `config.h`: model/runtime config, sampling params.
-  - `session.h`: KV cache and token history.
-  - `sampler.h`: temperature/top-k/top-p + penalties.
-  - `tokenizer.h`: HuggingFace tokenizer loader (BPE).
-- `runtime/iruntime.h`:
-  Runtime abstraction and device mapping.
-- `formats/safetensors.*`:
-  Model weight loader (HuggingFace safetensors).
-- `backends/cuda/`:
-  CUDA runtime and kernels (RMSNorm, RoPE, attention, MLP).
+- `apps/ember_cli/main.cpp`
+  CLI entry point, argument parsing, session lifecycle, and token loop.
+- `core/config.h`, `core/config_loader.cpp`
+  Model/runtime config and load path.
+- `core/session.h`
+  Runtime state (token history + KV cache ownership/layout).
+- `core/sampler.h`
+  Sampling params and token selection logic.
+- `runtime/iruntime.h`
+  Backend abstraction and device mapping.
+- `formats/safetensors.*`
+  HuggingFace safetensors loading.
+- `backends/cuda/cuda_runtime.cpp`
+  CUDA forward orchestration and layer execution.
+- `backends/cuda/kernels/`
+  CUDA kernels for RMSNorm, RoPE, attention, softmax, and related ops.
 
-## Qwen3-specific details
+## 3. Qwen3.5 architecture gap
 
-- Head dimension is explicit in config (not always hidden_size / num_heads).
-- Attention uses GQA (num_kv_heads < num_heads).
-- Q and K are normalized per head dimension (q_norm/k_norm).
-- RoPE uses model-configured rope_theta.
-- MLP uses SwiGLU: down_proj(silu(gate_proj(x)) * up_proj(x)).
+Qwen3.5 introduces a hybrid stack and (for larger variants) MoE. This does not
+fit a pure "all layers are Transformer attention + FFN" assumption.
 
-## Where to look when debugging
+Main gaps:
 
-- Output quality or logits drift:
-  - `backends/cuda/cuda_runtime.cpp`: layer forward, q/k norm, MLP.
-  - `backends/cuda/kernels/`: RMSNorm, RoPE, attention, softmax.
-- Tokenization mismatch:
-  - `core/tokenizer.h`, `formats/tokenizer.json` handling.
-- Sampling/looping text:
-  - `core/sampler.h` and CLI flags in `apps/ember_cli/main.cpp`.
+1. Layer type model:
+   current code assumes one dominant layer type; Qwen3.5 needs per-layer type
+   dispatch (`DeltaNet` or `GatedAttention`).
+2. State model:
+   current runtime centers on KV cache; DeltaNet layers need recurrent state in
+   addition to (or instead of) KV cache.
+3. Weight schema:
+   current Qwen3 naming/layout is insufficient for Qwen3.5 hybrid blocks.
+4. MoE path:
+   routing/dispatch/combine is not yet in the hot path.
 
-## Multi-GPU
+## 4. Planned Qwen3.5 runtime shape
 
-Pipeline parallelism splits layers across devices. Hidden states are moved via
-`cudaMemcpyPeer` between devices. See `runtime/iruntime.h` and
-`backends/cuda/cuda_runtime.cpp`.
+Target per-step flow for hybrid dense models:
+
+```text
+Input IDs
+  -> Embedding
+  -> For each layer i:
+     if layer[i] == DeltaNet:
+       norm -> deltanet update (recurrent state) -> residual -> norm -> ffn -> residual
+     else (GatedAttention):
+       norm -> gated attention (KV path) -> residual -> norm -> ffn -> residual
+  -> Final norm
+  -> LM head -> logits -> sampler
+```
+
+Required structural changes:
+
+- Extend session state with recurrent-state buffers for DeltaNet layers.
+- Split layer forward into two explicit paths in CUDA runtime.
+- Extend model config with hybrid layout metadata.
+- Extend loader/key mapping for Qwen3.5 weight names.
+
+## 5. Incremental implementation order
+
+1. Hybrid dense first (0.8B/2B/4B/9B/27B):
+   DeltaNet + GatedAttention + recurrent state + hybrid dispatch.
+2. MoE next (35B-A3B and above):
+   router, dispatch/combine, and expert scheduling.
+3. Memory/offload optimization:
+   FP8 load path, CPU offload for cold experts, prefetch scheduling.
+4. Training/rollout loops:
+   best-of-N and LoRA-oriented train/update paths.
+
+Detailed milestone plan is maintained in
+`docs/qwen35_upgrade_plan.md`.
+
+## 6. Multi-GPU note
+
+Current pipeline parallelism remains valid as the base strategy. Under Qwen3.5,
+it must handle mixed layer types and mixed state (KV + recurrent) while keeping
+cross-device transfer asynchronous.

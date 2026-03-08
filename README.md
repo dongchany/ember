@@ -1,17 +1,27 @@
 # Ember - Qwen3 CUDA Inference Engine
 
-轻量级 Qwen3 CUDA 推理引擎，专为消费级多 GPU（如双卡 RTX 3080Ti）设计。
+A lightweight CUDA inference engine for Qwen3 models, designed for consumer multi-GPU setups (for example, dual RTX 3080 Ti).
 
-## 快速开始
+## Current vs Next
 
-1) 编译（以 RTX 3080Ti 为例，SM=86）：
+As of **March 8, 2026**, Ember is production-focused on **Qwen3 FP16/BF16 inference**.
+
+- Current stable scope: Qwen3 dense inference, CUDA kernels, pipeline-parallel runtime, CLI/server path, and regression scripts.
+- Next major scope: Qwen3.5 hybrid architecture support (Gated DeltaNet + Gated Attention), then MoE/offload and training loop capabilities.
+
+For the execution plan, see [Qwen3.5 Upgrade Plan](docs/qwen35_upgrade_plan.md).
+
+## Quick Start
+
+1) Build (example: RTX 3080 Ti, `SM=86`):
 
 ```bash
 cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-默认是最小构建（只构建核心推理目标 `ember`）。如需旧测试/示例/基准：
+By default, Ember builds only the core inference target (`ember`).
+To also build legacy tests/examples/benchmarks:
 
 ```bash
 cmake -S . -B build \
@@ -21,196 +31,208 @@ cmake -S . -B build \
   -DEMBER_BUILD_BENCHMARKS=ON
 ```
 
-2) 下载模型（safetensors 格式，首次可能需要先 `huggingface-cli login`）：
+2) Download a model (safetensors format; first run may require `huggingface-cli login`):
 
 ```bash
-# 若未安装 huggingface-cli：pip install -U huggingface_hub
+# If huggingface-cli is missing: pip install -U huggingface_hub
 huggingface-cli download Qwen/Qwen3-0.6B --local-dir ./qwen3-0.6b
 ```
 
-3) 运行：
+3) Run:
 
 ```bash
 ./build/ember -m ./qwen3-0.6b -p "Hello, my name is"
 ```
 
-## 文档
+## Documentation
 
-- [开发指南](docs/development.md)
-- [测试与回归](docs/testing.md)
-- [架构概览](docs/architecture.md)
-- [采样器解析](docs/sampler_explanation.md)
-- [历史归档](legacy/README.md)
+English (default):
+- [Development Guide](docs/development.md)
+- [Testing and Regression](docs/testing.md)
+- [Architecture Overview](docs/architecture.md)
+- [Qwen3.5 Upgrade Plan](docs/qwen35_upgrade_plan.md)
+- [Sampler Deep Dive](docs/sampler_explanation.md)
+- [Benchmark Handbook](benchmarks/README.md)
+- [Legacy Archive](legacy/README.md)
 
-## 特性
+Chinese:
+- [README (Chinese)](README.zh.md)
+- [Sampler Deep Dive (Chinese)](docs/sampler_explanation.zh.md)
+- [Benchmark Handbook (Chinese)](benchmarks/README.zh.md)
 
-- **原生 CUDA 实现**：完全控制计算流程，不依赖 ggml/llama.cpp
-- **Safetensors 直接加载**：原生解析 HuggingFace 格式，无需转换
-- **Pipeline Parallel**：支持多卡层级切分，自动根据显存分配
-- **FP16 计算**：权重和激活使用 FP16，cuBLAS GEMM 用于矩阵运算
-- **自定义 Kernels**：RMSNorm、RoPE、Softmax、SiLU、Attention 等
+## Features
 
-## 项目结构
+- **Native CUDA implementation**: full control over compute flow, without ggml/llama.cpp.
+- **Direct safetensors loading**: loads HuggingFace format natively, no conversion step.
+- **Pipeline parallelism**: multi-GPU layer split with memory-aware allocation.
+- **FP16 compute**: FP16 weights/activations, GEMM via cuBLAS.
+- **Custom kernels**: RMSNorm, RoPE, Softmax, SiLU, Attention, and more.
 
-```
+## Project Structure
+
+```text
 ember/
-├── apps/ember_cli/         # CLI 入口（main.cpp）
-├── cli/                    # CLI 参数解析
-├── core/                   # 核心抽象（纯 C++，不依赖 CUDA）
-├── runtime/                # 调度/设备映射等 runtime 逻辑
-├── formats/                # safetensors/config 等加载
-├── backends/cuda/          # CUDA runtime + kernels
-├── examples/               # 最小可运行示例
-├── benchmarks/             # 性能/互联带宽基准
-├── tests/                  # 单测与 smoke tests
-├── scripts/                # CI/对齐检查脚本
-├── docs/                   # 当前设计/测试文档
-└── legacy/                 # 旧阶段文档与脚本归档
+|-- apps/ember_cli/         # CLI entry point (main.cpp)
+|-- cli/                    # CLI argument parsing
+|-- core/                   # Core abstractions (pure C++, no CUDA dependency)
+|-- runtime/                # Scheduling and device mapping runtime logic
+|-- formats/                # safetensors/config loaders
+|-- backends/cuda/          # CUDA runtime + kernels
+|-- examples/               # Minimal runnable examples
+|-- benchmarks/             # Performance and interconnect benchmarks
+|-- tests/                  # Unit tests and smoke tests
+|-- scripts/                # CI and alignment scripts
+|-- docs/                   # Current design and testing docs
+`-- legacy/                 # Archived old-stage docs and scripts
 ```
 
-## 构建
+## Build
 
-### 依赖
+### Requirements
 
 - CMake 3.18+
-- CUDA Toolkit 11.0+（推荐 12.x）
-- C++17 编译器
+- CUDA Toolkit 11.0+ (12.x recommended)
+- C++17 compiler
 
-### 编译
+### Compile
 
 ```bash
-cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release  # RTX 3080Ti
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release  # RTX 3080 Ti
 cmake --build build --parallel
 ```
 
-CUDA 架构参数：
+Common CUDA architecture values:
 - `86` - RTX 3080/3090
 - `89` - RTX 4090
 - `80` - A100
 
-## 使用
+## Usage
 
-### 基本用法
+### Basic Examples
 
 ```bash
-# 单卡推理
+# Single-GPU inference
 ./build/ember -m /path/to/qwen3-4b -p "Hello, my name is"
 
-# 双卡推理
+# Dual-GPU inference
 ./build/ember -m /path/to/qwen3-14b --devices 0,1 -p "Explain quantum computing"
 
-# 交互模式
+# Interactive mode
 ./build/ember -m /path/to/qwen3-4b -i
 ```
 
-### 参数
+### CLI Arguments
 
-| 参数 | 说明 | 默认值 |
+| Argument | Description | Default |
 |------|------|--------|
-| `-m, --model` | 模型目录（包含 safetensors 和 config.json） | 必填 |
-| `-p, --prompt` | 输入提示 | "Hello, my name is" |
-| `--devices` | GPU 设备列表 | 0 |
-| `-c, --ctx-size` | 上下文长度 | 2048 |
-| `-n, --n-predict` | 生成 token 数 | 128 |
-| `--temp` | 温度 | 0.7 |
-| `--top-p` | Top-P | 0.9 |
-| `--top-k` | Top-K | 40 |
-| `-i, --interactive` | 交互模式 | false |
-| `-v, --verbose` | 详细输出 | false |
+| `-m, --model` | Model directory (must contain safetensors and `config.json`) | Required |
+| `-p, --prompt` | Input prompt | `"Hello, my name is"` |
+| `--devices` | GPU device list | `0` |
+| `-c, --ctx-size` | Context length | `2048` |
+| `-n, --n-predict` | Number of generated tokens | `128` |
+| `--temp` | Temperature | `0.7` |
+| `--top-p` | Top-P | `0.9` |
+| `--top-k` | Top-K | `40` |
+| `-i, --interactive` | Interactive mode | `false` |
+| `-v, --verbose` | Verbose output | `false` |
 
-## 支持的模型
+## Supported Models
 
 - Qwen3-0.6B
 - Qwen3-1.7B
 - Qwen3-4B
 - Qwen3-8B
-- Qwen3-14B（需双卡）
+- Qwen3-14B (typically needs dual GPUs)
 
-模型需从 HuggingFace 下载 safetensors 格式：
+Models should be downloaded from HuggingFace in safetensors format:
 
 ```bash
-# 使用 huggingface-cli
-# 若未安装 huggingface-cli：pip install -U huggingface_hub
+# If huggingface-cli is missing: pip install -U huggingface_hub
 huggingface-cli download Qwen/Qwen3-4B --local-dir ./qwen3-4b
 ```
 
-## 架构设计
+## Architecture
 
-### 核心抽象
+### Core Abstractions
 
-1. **Tensor**: 轻量视图（shape + dtype + data 指针），不管理生命周期
-2. **Session**: 推理会话，管理 KV Cache 和生成状态
-3. **IRuntime**: 后端接口，支持 CUDA（未来可扩展 CPU）
-4. **DeviceMap**: 层级设备映射，支持 Pipeline Parallel
+1. **Tensor**: lightweight view (`shape + dtype + data ptr`), no ownership.
+2. **Session**: inference session state including KV cache.
+3. **IRuntime**: backend interface (CUDA now, extensible in future).
+4. **DeviceMap**: layer-to-device mapping for pipeline parallelism.
 
-### 计算流程
+### Compute Flow
 
-```
+```text
 Input IDs
-    ↓
+    |
+    v
 Embedding Lookup (GPU 0)
-    ↓
-┌─────────────────────────────┐
-│ Layer 0-N (可跨多卡)         │
-│   ├── Input LayerNorm       │
-│   ├── QKV Projection        │
-│   ├── RoPE                  │
-│   ├── KV Cache Update       │
-│   ├── Attention (Q@K^T→V)   │
-│   ├── O Projection          │
-│   ├── Residual Add          │
-│   ├── Post-Attn LayerNorm   │
-│   ├── MLP (SwiGLU)          │
-│   └── Residual Add          │
-└─────────────────────────────┘
-    ↓
+    |
+    v
++-----------------------------+
+| Layer 0-N (may span GPUs)   |
+|   |- Input LayerNorm        |
+|   |- QKV Projection         |
+|   |- RoPE                   |
+|   |- KV Cache Update        |
+|   |- Attention (Q@K^T -> V) |
+|   |- O Projection           |
+|   |- Residual Add           |
+|   |- Post-Attn LayerNorm    |
+|   |- MLP (SwiGLU)           |
+|   `- Residual Add           |
++-----------------------------+
+    |
+    v
 Final LayerNorm
-    ↓
-LM Head → Logits
-    ↓
-Sampling → Next Token
+    |
+    v
+LM Head -> Logits
+    |
+    v
+Sampling -> Next Token
 ```
 
-### 多卡策略
+### Multi-GPU Strategy
 
-采用 Pipeline Parallel，按层切分：
+Ember uses layer-wise pipeline parallelism. Example split:
 
-```
+```text
 GPU 0: Embedding + Layers 0-13
 GPU 1: Layers 14-27 + LM Head
 ```
 
-层间通过 `cudaMemcpyPeer` 传输 hidden_states。
+Hidden states are transferred with `cudaMemcpyPeer`.
 
-## 性能
+## Performance
 
-（实际性能取决于硬件和模型大小）
+Actual throughput depends on hardware and model size.
 
-| 模型 | 显存占用 | 预期速度 |
+| Model | Approx. VRAM | Expected Speed |
 |------|----------|----------|
 | Qwen3-4B (FP16) | ~8 GB | ~40 tok/s |
 | Qwen3-8B (FP16) | ~16 GB | ~25 tok/s |
-| Qwen3-14B (FP16) | ~28 GB | ~15 tok/s (双卡) |
+| Qwen3-14B (FP16) | ~28 GB | ~15 tok/s (dual GPU) |
 
-## 路线图
+## Roadmap
 
-- [x] M0: 单卡推理基础框架
-- [ ] M1: 双卡 Pipeline Parallel
-- [ ] M2: 量化支持 (INT8/INT4)
-- [ ] M3: FlashAttention 优化
+- [x] M0: Single-GPU inference baseline
+- [ ] M1: Dual-GPU pipeline parallelism
+- [ ] M2: Quantization support (INT8/INT4)
+- [ ] M3: FlashAttention optimization
 
-## 引用
+## Citation
 
-如果你在论文/报告中使用 Ember，可引用 Zenodo 归档：
+If you use Ember in a paper or report, cite the Zenodo archive:
 
 - DOI: https://doi.org/10.5281/zenodo.18477269
 
-## 许可证
+## License
 
-Apache-2.0 
+Apache-2.0
 
-## 致谢
+## Acknowledgements
 
-- [llama.cpp](https://github.com/ggerganov/llama.cpp) - 架构参考
-- [HuggingFace Transformers](https://github.com/huggingface/transformers) - 模型格式
-- [Qwen](https://github.com/QwenLM/Qwen) - 模型权重
+- [llama.cpp](https://github.com/ggerganov/llama.cpp) - architecture inspiration
+- [HuggingFace Transformers](https://github.com/huggingface/transformers) - model format ecosystem
+- [Qwen](https://github.com/QwenLM/Qwen) - model weights
