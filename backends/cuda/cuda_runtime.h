@@ -13,6 +13,8 @@ namespace cuda {
 
 // Qwen3 层的权重
 struct Qwen3LayerWeights {
+    HybridLayerType layer_type = HybridLayerType::GATED_ATTENTION;
+
     // Self Attention
     void* q_proj_weight = nullptr;   // [num_heads * head_dim, hidden_size]
     void* k_proj_weight = nullptr;   // [num_kv_heads * head_dim, hidden_size]
@@ -219,6 +221,12 @@ private:
     Error forward_layer(int layer_idx, int batch_size, int seq_len, int start_pos, Session& session,
                         bool skip_input_copy,
                         const int* start_pos_by_batch = nullptr);
+    Error forward_attention_layer(int layer_idx, int batch_size, int seq_len, int start_pos, Session& session,
+                                  bool skip_input_copy,
+                                  const int* start_pos_by_batch = nullptr);
+    Error forward_deltanet_layer(int layer_idx, int batch_size, int seq_len, int start_pos, Session& session,
+                                 bool skip_input_copy,
+                                 const int* start_pos_by_batch = nullptr);
     Error decode_single_forward_to_lm_head_(int last_token, Session& session);
     Error forward_final_norm(int batch_size, int seq_len, Session& session);
     Error forward_lm_head(int batch_size, int seq_len);

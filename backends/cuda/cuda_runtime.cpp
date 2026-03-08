@@ -33,6 +33,17 @@ static std::string format_bytes(size_t bytes) {
     }
 }
 
+static const char* layer_type_name(HybridLayerType t) {
+    switch (t) {
+        case HybridLayerType::GATED_ATTENTION:
+            return "gated_attention";
+        case HybridLayerType::DELTANET:
+            return "deltanet";
+        default:
+            return "unknown";
+    }
+}
+
 static cudaDataType_t to_cuda_dtype(DType dtype) {
     switch (dtype) {
         case DType::F16:  return CUDA_R_16F;
@@ -543,19 +554,15 @@ Error CudaRuntime::load(const std::string& model_path,
     
     config_ = config;
     device_map_ = device_map;
-
-    if (config_.uses_hybrid_attention()) {
-        return Error(
-            ErrorCode::NOT_IMPLEMENTED,
-            "Hybrid Qwen3.5 layout detected in config, but DeltaNet/Gated-Attention "
-            "hybrid CUDA forward path is not implemented yet."
-        );
-    }
     
     std::cout << "[CudaRuntime] Loading model from: " << model_path << std::endl;
     std::cout << "[CudaRuntime] Model: " << config.model_type << std::endl;
     std::cout << "[CudaRuntime] Layers: " << config.num_layers << std::endl;
     std::cout << "[CudaRuntime] Hidden size: " << config.hidden_size << std::endl;
+    if (config_.uses_hybrid_attention()) {
+        std::cout << "[CudaRuntime] Hybrid layout: kv_layers=" << config_.num_kv_layers()
+                  << ", recurrent_layers=" << config_.num_recurrent_layers() << std::endl;
+    }
     
     device_map_.print();
     
@@ -693,6 +700,17 @@ Error CudaRuntime::load_weights(const std::string& model_path) {
 Error CudaRuntime::load_layer_weights(int layer_idx, ModelWeightLoader& loader, int device_id) {
     auto& layer = weights_.layers[layer_idx];
     layer.device_id = device_id;
+    layer.layer_type = config_.is_deltanet_layer(layer_idx)
+        ? HybridLayerType::DELTANET
+        : HybridLayerType::GATED_ATTENTION;
+
+    if (layer.layer_type == HybridLayerType::DELTANET) {
+        return Error(
+            ErrorCode::NOT_IMPLEMENTED,
+            "Layer " + std::to_string(layer_idx) + " (" + layer_type_name(layer.layer_type) +
+            ") weight mapping is not implemented yet"
+        );
+    }
     
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".";
     
@@ -2522,6 +2540,40 @@ Error CudaRuntime::forward_layer(int layer_idx,
                                  Session& session,
                                  bool skip_input_copy,
                                  const int* start_pos_by_batch) {
+    if (config_.is_deltanet_layer(layer_idx)) {
+        return forward_deltanet_layer(layer_idx, batch_size, seq_len, start_pos, session,
+                                      skip_input_copy, start_pos_by_batch);
+    }
+    return forward_attention_layer(layer_idx, batch_size, seq_len, start_pos, session,
+                                   skip_input_copy, start_pos_by_batch);
+}
+
+Error CudaRuntime::forward_deltanet_layer(int layer_idx,
+                                          int batch_size,
+                                          int seq_len,
+                                          int start_pos,
+                                          Session& session,
+                                          bool skip_input_copy,
+                                          const int* start_pos_by_batch) {
+    (void)batch_size;
+    (void)seq_len;
+    (void)start_pos;
+    (void)session;
+    (void)skip_input_copy;
+    (void)start_pos_by_batch;
+    return Error(
+        ErrorCode::NOT_IMPLEMENTED,
+        "DeltaNet forward path is not implemented yet (layer " + std::to_string(layer_idx) + ")"
+    );
+}
+
+Error CudaRuntime::forward_attention_layer(int layer_idx,
+                                           int batch_size,
+                                           int seq_len,
+                                           int start_pos,
+                                           Session& session,
+                                           bool skip_input_copy,
+                                           const int* start_pos_by_batch) {
     int device_id = device_map_.layer_to_device[layer_idx];
     auto& act = activations_[device_id];
     auto& layer = weights_.layers[layer_idx];
