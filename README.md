@@ -47,6 +47,7 @@ huggingface-cli download Qwen/Qwen3-0.6B --local-dir ./qwen3-0.6b
 ## Documentation
 
 English (default):
+- [Contributing](CONTRIBUTING.md)
 - [Development Guide](docs/development.md)
 - [Testing and Regression](docs/testing.md)
 - [Architecture Overview](docs/architecture.md)
