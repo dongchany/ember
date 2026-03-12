@@ -6,7 +6,7 @@ Contributions of all kinds are welcome, including bug reports, docs fixes, tests
 
 ## Project Focus
 
-As of March 8, 2026, Ember is production-focused on Qwen3 FP16/BF16 inference.
+As of March 12, 2026, Ember is focused on Qwen dense inference and the Qwen3.5 runtime path on consumer NVIDIA GPUs.
 
 Active contribution areas include:
 
@@ -14,7 +14,7 @@ Active contribution areas include:
 - Documentation and examples
 - CUDA kernel and backend improvements
 - Tests and benchmarks
-- Roadmap work such as quantization, FlashAttention, and Qwen3.5 support
+- Roadmap work such as Qwen3.5 hybrid support, MoE runtime, and heterogeneous offload
 
 ## Ways to Contribute
 

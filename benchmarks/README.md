@@ -196,7 +196,7 @@ Write CSV:
 ./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --csv /tmp/stage.csv
 ```
 
-Include sampling (closer to rollout behavior):
+Include sampling (closer to interactive serving behavior):
 
 ```bash
 ./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --decode-with-sampling --csv /tmp/stage_rollout.csv

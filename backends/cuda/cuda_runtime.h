@@ -98,13 +98,6 @@ public:
         float total_ms = 0.0f;
     };
 
-    struct LoraApplyStats {
-        int updated_matrices = 0;
-        int skipped_matrices = 0;
-        float scale_used = 0.0f;
-        float wall_ms = 0.0f;
-    };
-
     CudaRuntime();
     ~CudaRuntime() override;
     
@@ -119,23 +112,6 @@ public:
     Error prefill_with_logits(const std::vector<int>& tokens, Session& session, std::vector<float>& logits) override;
     Error decode(int last_token, Session& session, std::vector<float>& logits) override;
 
-    // Merge a PEFT LoRA adapter into current attention projection weights in-place.
-    // Supported targets: self_attn.{q_proj,k_proj,v_proj,o_proj}.
-    // When replace_existing=true and a previous adapter was merged with this API,
-    // it is first unmerged before the new adapter is applied.
-    Error apply_lora_adapter(const std::string& adapter_dir,
-                             float scale = 1.0f,
-                             bool replace_existing = false,
-                             LoraApplyStats* stats = nullptr);
-
-    // Debug helper: copy one attention projection weight matrix to host as float32.
-    // Layout is row-major [out_dim, in_dim], same as model weights.
-    Error debug_copy_attention_weight(int layer_idx,
-                                      const std::string& proj,
-                                      std::vector<float>& out,
-                                      int* out_dim = nullptr,
-                                      int* in_dim = nullptr) const;
-    
     MemoryEstimate estimate_memory(const ModelConfig& config, 
                                    int ctx_len, int batch_size) override;
     
@@ -258,10 +234,6 @@ private:
     // CUDA streams（每个设备一个）
     std::vector<cudaStream_t> streams_;
 
-    // Last adapter state for optional replace semantics.
-    bool has_active_lora_adapter_ = false;
-    std::string active_lora_adapter_dir_;
-    float active_lora_scale_ = 0.0f;
     std::vector<cudaStream_t> transfer_streams_;
 
     // Per-layer timing profile (ms) for the most recent prefill/decode call.

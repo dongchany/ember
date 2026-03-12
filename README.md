@@ -32,13 +32,12 @@ cmake --build build --parallel
 ```
 
 By default, Ember builds only the core inference target (`ember`).
-To also build legacy tests/examples/benchmarks:
+To also build optional tests/benchmarks:
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_CUDA_ARCHITECTURES=86 \
   -DEMBER_BUILD_TESTS=ON \
-  -DEMBER_BUILD_EXAMPLES=ON \
   -DEMBER_BUILD_BENCHMARKS=ON
 ```
 
@@ -64,7 +63,6 @@ English (default):
 - [Architecture Overview](docs/architecture.md)
 - [Sampler Deep Dive](docs/sampler_explanation.md)
 - [Benchmark Handbook](benchmarks/README.md)
-- [Legacy Archive](legacy/README.md)
 
 Chinese:
 - [README (Chinese)](README.zh.md)
@@ -89,12 +87,10 @@ ember/
 |-- runtime/                # Scheduling and device mapping runtime logic
 |-- formats/                # safetensors/config loaders
 |-- backends/cuda/          # CUDA runtime + kernels
-|-- examples/               # Minimal runnable examples
 |-- benchmarks/             # Performance and interconnect benchmarks
 |-- tests/                  # Unit tests and smoke tests
 |-- scripts/                # CI and alignment scripts
-|-- docs/                   # Current design and testing docs
-`-- legacy/                 # Archived old-stage docs and scripts
+`-- docs/                   # Current design and testing docs
 ```
 
 ## Build

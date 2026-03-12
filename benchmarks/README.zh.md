@@ -182,7 +182,7 @@ cmake --build build -j
 ./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --csv /tmp/stage.csv
 ```
 
-包含 sampling（更接近真实 rollout 路径）：
+包含 sampling（更接近真实服务路径）：
 
 ```bash
 ./build/ember_stage_breakdown --model /path/to/model --gpus 0,1 --decode-with-sampling --csv /tmp/stage_rollout.csv

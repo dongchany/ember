@@ -1,10 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 project(ember LANGUAGES CXX CUDA)
 
-# Training module (optional)
-option(EMBER_ENABLE_TRAIN "Build training module" OFF)
 option(EMBER_BUILD_TESTS "Build tests" OFF)
-option(EMBER_BUILD_EXAMPLES "Build examples" OFF)
 option(EMBER_BUILD_BENCHMARKS "Build benchmarks" OFF)
 
 # C++ 标准
@@ -35,7 +32,7 @@ include_directories(${CMAKE_SOURCE_DIR})
 include_directories(${CUDAToolkit_INCLUDE_DIRS})
 
 # =============================================================================
-# CUDA Common (shared by infer/train)
+# CUDA Common
 # =============================================================================
 add_library(ember_cuda_common INTERFACE)
 target_include_directories(ember_cuda_common INTERFACE
@@ -162,32 +159,6 @@ if(EMBER_BUILD_TESTS)
     )
 endif()
 
-if(EMBER_BUILD_EXAMPLES)
-    # =============================================================================
-    # Examples
-    # =============================================================================
-    add_executable(ember_example_minimal
-        examples/minimal_runtime.cpp
-    )
-    target_link_libraries(ember_example_minimal PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_example_decode_loop
-        examples/decode_loop.cpp
-    )
-    target_link_libraries(ember_example_decode_loop PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_example_check_mode
-        examples/check_mode.cpp
-    )
-    target_link_libraries(ember_example_check_mode PRIVATE
-        ember_infer
-    )
-endif()
-
 if(EMBER_BUILD_BENCHMARKS)
     # =============================================================================
     # Benchmarks
@@ -225,48 +196,6 @@ if(EMBER_BUILD_BENCHMARKS)
         benchmarks/stage_breakdown.cpp
     )
     target_link_libraries(ember_stage_breakdown PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_prefix_cache_benchmark
-        benchmarks/prefix_cache_benchmark.cpp
-    )
-    target_link_libraries(ember_prefix_cache_benchmark PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_multi_candidate_rollout
-        benchmarks/multi_candidate_rollout.cpp
-    )
-    target_link_libraries(ember_multi_candidate_rollout PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_cache_policy_sim
-        benchmarks/cache_policy_sim.cpp
-    )
-    target_link_libraries(ember_cache_policy_sim PRIVATE
-        ember_core
-    )
-
-    add_executable(ember_lora_hot_update_benchmark
-        benchmarks/lora_hot_update_benchmark.cpp
-    )
-    target_link_libraries(ember_lora_hot_update_benchmark PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_lora_weight_merge_check
-        benchmarks/lora_weight_merge_check.cpp
-    )
-    target_link_libraries(ember_lora_weight_merge_check PRIVATE
-        ember_infer
-    )
-
-    add_executable(ember_rollout_update_loop_benchmark
-        benchmarks/rollout_update_loop_benchmark.cpp
-    )
-    target_link_libraries(ember_rollout_update_loop_benchmark PRIVATE
         ember_infer
     )
 

@@ -31,13 +31,12 @@ cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
 
-默认是最小构建（只构建核心推理目标 `ember`）。如需旧测试/示例/基准：
+默认是最小构建（只构建核心推理目标 `ember`）。如需额外构建测试和基准：
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_CUDA_ARCHITECTURES=86 \
   -DEMBER_BUILD_TESTS=ON \
-  -DEMBER_BUILD_EXAMPLES=ON \
   -DEMBER_BUILD_BENCHMARKS=ON
 ```
 
@@ -60,7 +59,6 @@ huggingface-cli download Qwen/Qwen3-0.6B --local-dir ./qwen3-0.6b
 - [测试与回归](docs/testing.md)
 - [架构概览](docs/architecture.md)
 - [采样器解析](docs/sampler_explanation.md)
-- [历史归档](legacy/README.md)
 
 ## 特性
 
@@ -80,12 +78,10 @@ ember/
 ├── runtime/                # 调度/设备映射等 runtime 逻辑
 ├── formats/                # safetensors/config 等加载
 ├── backends/cuda/          # CUDA runtime + kernels
-├── examples/               # 最小可运行示例
 ├── benchmarks/             # 性能/互联带宽基准
 ├── tests/                  # 单测与 smoke tests
 ├── scripts/                # CI/对齐检查脚本
-├── docs/                   # 当前设计/测试文档
-└── legacy/                 # 旧阶段文档与脚本归档
+└── docs/                   # 当前设计/测试文档
 ```
 
 ## 构建

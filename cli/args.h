@@ -8,7 +8,6 @@ namespace cli {
 
 struct Args {
     std::string model_path;
-    std::string adapter_path;
     std::string prompt;
     std::vector<int> devices = {0};
     int ctx_size = 2048;
@@ -20,7 +19,6 @@ struct Args {
     float presence_penalty = 0.2f;
     float frequency_penalty = 0.2f;
     int no_repeat_ngram = 3;
-    float lora_scale = 1.0f;
     float memory_fraction = 0.9f;
     bool verbose = false;
     bool interactive = false;

@@ -98,8 +98,8 @@ Required structural changes:
    router, dispatch/combine, and expert scheduling.
 3. Memory/offload optimization:
    FP8 load path, CPU offload for cold experts, prefetch scheduling.
-4. Training/rollout loops:
-   best-of-N and LoRA-oriented train/update paths.
+4. Serving and benchmark hardening:
+   reproducible benchmarking, regression checks, and OpenAI-compatible serving.
 
 ## 6. Multi-GPU note
 
