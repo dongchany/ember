@@ -1,9 +1,9 @@
 # Architecture Overview
 
-This document describes Ember's current runtime architecture and the planned
-architecture changes for Qwen3.5.
+This document describes Ember's current runtime architecture and the near-term
+runtime direction for Qwen3.5.
 
-Status date: **March 8, 2026**.
+Status date: **March 12, 2026**.
 
 ## 1. Current architecture (Qwen3)
 
@@ -90,7 +90,7 @@ Required structural changes:
 - Extend model config with hybrid layout metadata.
 - Extend loader/key mapping for Qwen3.5 weight names.
 
-## 5. Incremental implementation order
+## 5. Near-term implementation order
 
 1. Hybrid dense first (0.8B/2B/4B/9B/27B):
    DeltaNet + GatedAttention + recurrent state + hybrid dispatch.
@@ -100,9 +100,6 @@ Required structural changes:
    FP8 load path, CPU offload for cold experts, prefetch scheduling.
 4. Training/rollout loops:
    best-of-N and LoRA-oriented train/update paths.
-
-Detailed milestone plan is maintained in
-`docs/qwen35_upgrade_plan.md`.
 
 ## 6. Multi-GPU note
 

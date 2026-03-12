@@ -2,6 +2,26 @@
 
 轻量级 Qwen3 CUDA 推理引擎，专为消费级多 GPU（如双卡 RTX 3080Ti）设计。
 
+## 路线图
+
+截至 **2026-03-12**，Ember 聚焦一个很窄的目标：在消费级 NVIDIA GPU 上做好高性能 Qwen 推理。
+
+当前：
+- 稳定的 Qwen3 dense CUDA 推理
+- 原生 safetensors 加载
+- 多 GPU pipeline parallel runtime
+- 最小可用 CLI / server 路径
+
+下一步：
+- Qwen3.5 混合架构支持
+- DeltaNet + Gated Attention 运行时
+- 对齐 HF 的正确性与回归验证
+
+之后：
+- Qwen3.5 35B-A3B MoE 推理
+- 双卡 + CPU offload 异构执行
+- 可复现 benchmark 与 OpenAI 兼容服务路径
+
 ## 快速开始
 
 1) 编译（以 RTX 3080Ti 为例，SM=86）：

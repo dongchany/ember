@@ -2,14 +2,25 @@
 
 A lightweight CUDA inference engine for Qwen3 models, designed for consumer multi-GPU setups (for example, dual RTX 3080 Ti).
 
-## Current vs Next
+## Roadmap
 
-As of **March 8, 2026**, Ember is production-focused on **Qwen3 FP16/BF16 inference**.
+As of **March 12, 2026**, Ember is focused on a narrow goal: high-performance Qwen inference on consumer NVIDIA GPUs.
 
-- Current stable scope: Qwen3 dense inference, CUDA kernels, pipeline-parallel runtime, CLI/server path, and regression scripts.
-- Next major scope: Qwen3.5 hybrid architecture support (Gated DeltaNet + Gated Attention), then MoE/offload and training loop capabilities.
+Current:
+- Stable Qwen3 dense CUDA inference
+- Native safetensors loading
+- Multi-GPU pipeline-parallel runtime
+- Minimal CLI and server path
 
-For the execution plan, see [Qwen3.5 Upgrade Plan](docs/qwen35_upgrade_plan.md).
+Next:
+- Qwen3.5 hybrid architecture support
+- DeltaNet + Gated Attention runtime
+- HF-aligned correctness and regression harness
+
+Then:
+- Qwen3.5 35B-A3B MoE inference
+- Dual-GPU + CPU offload execution path
+- Reproducible benchmarks and OpenAI-compatible serving
 
 ## Quick Start
 
@@ -51,7 +62,6 @@ English (default):
 - [Development Guide](docs/development.md)
 - [Testing and Regression](docs/testing.md)
 - [Architecture Overview](docs/architecture.md)
-- [Qwen3.5 Upgrade Plan](docs/qwen35_upgrade_plan.md)
 - [Sampler Deep Dive](docs/sampler_explanation.md)
 - [Benchmark Handbook](benchmarks/README.md)
 - [Legacy Archive](legacy/README.md)
