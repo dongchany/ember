@@ -1,81 +1,59 @@
-# Prerequisites
-*.d
+# Bazel
+bazel-*
+.bazelrc.user
 
-# Compiled Object files
-*.slo
-*.lo
+# Compiled
 *.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
 *.so
 *.dylib
-*.dll
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
-*.lai
-*.la
 *.a
-*.lib
-
-# Executables
+*.dll
 *.exe
 *.out
-*.app
 
-# debug information files
-*.dwo
+# CUDA
+*.cubin
+*.ptx
+*.fatbin
 
-# Build outputs
-build/
-build-*/
-build-ci/
-cmake-build-*/
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-compile_commands.json
-Testing/
-
-# Runtime/debug artifacts
-debug/
-*.log
-
-# Python caches
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+*.egg
+.eggs/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 
-# Local virtual environments
+# Virtual environments
+*-env/
 .venv/
 venv/
-torch-env/
-sglang-env/
-vllm-env/
 
-# Experiment outputs
-reports/*
+# Triton cache
+.triton/
 
-# Editor/OS local files
-.vscode/
+# Build
+build/
+build-*/
+cmake-build-*/
+
+# IDE / OS
 .idea/
+.vscode/
+*.swp
 .DS_Store
 
-# Local helper context
-ember_project_context.txt
+# Benchmark results (tracked separately if needed)
+benchmarks/results/
+
+# Secrets
+.env
+*.key
+
+# Debug
+*.log
+*.dwo
+*.pdb

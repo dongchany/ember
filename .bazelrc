@@ -1,0 +1,27 @@
+# Ember Bazel Configuration
+
+# C++ standard
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+
+# CUDA configuration
+build:cuda --@rules_cuda//cuda:enable=True
+build:cuda --crosstool_top=@rules_cuda//cuda:toolchain
+
+# Optimized build
+build --compilation_mode=opt
+
+# Python configuration
+build --python_path=python3
+
+# Remote caching (enable when CI is set up)
+# build --remote_cache=grpc://localhost:9092
+
+# Test configuration
+test --test_output=errors
+test --test_verbose_timeout_warnings
+
+# Convenience aliases
+build:debug --compilation_mode=dbg
+build:debug --cxxopt=-g
+build:debug --strip=never
